@@ -195,3 +195,71 @@ async def process_act_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("❌ Создание награды отменено.")
     await callback.answer()
+
+@router.types.CallbackQuery(F.data == "chest_open_click")
+async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
+    # Чтобы сообщение в чате не "повисло", проверяем, не удалил ли кто-то сундук уже
+    # Защита от одновременных кликов (Race Condition): используем изменение текста сообщения как атомарный замок
+    try:
+        # Меняем текст сообщения, закрывая сундук. Кто первый успел изменить — тот и победил
+        await callback.message.edit_text(
+            f"🔒 **Секретный сундук открыт!** 🔒\n\n"
+            f"👤 Счастливчик: {callback.from_user.mention_html()}\n"
+            f"🎉 Сундук пуст, награда выдана в личный кабинет победителю!",
+            reply_markup=None, # Удаляем кнопку, чтобы больше никто не кликал
+            parse_mode="HTML"
+        )
+    except Exception:
+        # Если Telegram вернул ошибку (сообщение уже изменено другим кликом), значит юзер опоздал
+        await callback.answer("😢 Ой! Кто-то оказался быстрее тебя и уже забрал сундук!", show_alert=True)
+        return
+
+    # Розыгрыш награды из базы данных на основе весов (алгоритм рулетки)
+    rewards_result = await db_session.execute(select(ChestReward))
+    rewards = rewards_result.scalars().all()
+
+    if not rewards:
+        # Базовый утешительный приз, если менеджер не заполнил пул
+        base_rating = 15
+        db_user.current_rating += base_rating
+        db_user.lifetime_rating += base_rating
+        await db_session.commit()
+        await callback.bot.send_message(
+            chat_id=db_user.tg_id,
+            text=f"📦 Ты открыл секретный сундук в чате!\n🎁 Твой выигрыш: +{base_rating} {settings.CURRENCY_NAME}."
+        )
+        return
+
+    # Алгоритм случайного выбора на основе весов (weights)
+    population = [r for r in rewards]
+    weights = [r.weight for r in rewards]
+    win_reward = random.choices(population, weights=weights, k=1)[0]
+
+    if win_reward.reward_type == "rating":
+        amount = int(win_reward.value)
+        db_user.current_rating += amount
+        db_user.lifetime_rating += amount
+        await db_session.commit()
+        
+        await callback.bot.send_message(
+            chat_id=db_user.tg_id,
+            text=f"📦 Ты открыл секретный сундук в чате!\n🎁 Твой выигрыш: +{amount} {settings.CURRENCY_NAME} на баланс!"
+        )
+    else:
+        # Физический товар оформляется как заказ со статусом CREATED, источник "chest"
+        new_order = Order(
+            user_id=db_user.tg_id,
+            source="chest",
+            item_name=f"[СУНДУК] {win_reward.value}",
+            status=OrderStatus.CREATED,
+            delivery_data=f"Выиграно в сундуке. Пользователю необходимо зайти в '🎁 Мои Награды' и передать контакты (или менеджер свяжется сам)"
+        )
+        db_session.add(new_order)
+        await db_session.commit()
+        
+        await callback.bot.send_message(
+            chat_id=db_user.tg_id,
+            text=f"📦 **Вау! Ты выиграл СУПЕР-ПРИЗ из сундука!**\n🎁 Твой выигрыш: *{win_reward.value}*\n\n"
+                 f"Заявка уже отправлена менеджерам. Статус посылки отслеживайте по кнопке '🎁 Мои Награды'.",
+            parse_mode="Markdown"
+        )
