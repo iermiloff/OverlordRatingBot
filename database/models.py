@@ -1,8 +1,16 @@
 from sqlalchemy import Column, Integer, BigInteger, String, Boolean, DateTime, ForeignKey, Float
 from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
+import enum
 
 Base = declarative_base()
+
+class OrderStatus(str, enum.Enum):
+    """Глобальное перечисление статусов обработки заказов и наград."""
+    CREATED = "created"      # Создан / ожидает менеджера
+    PROCESSED = "processed"  # Менеджер взял в работу
+    COMPLETED = "completed"  # Выдан / отправлен клиенту
+    REJECTED = "rejected"    # Отклонен менеджером
 
 class User(Base):
     __tablename__ = "users"
@@ -19,7 +27,7 @@ class User(Base):
     antifraud_reason = Column(String(256), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
-    # Реляции
+    # Реляционные связи
     inventory = relationship("Inventory", back_populates="user", cascade="all, delete-orphan")
 
 class ShopItem(Base):
@@ -29,8 +37,8 @@ class ShopItem(Base):
     name = Column(String(128), nullable=False)
     description = Column(String(512), nullable=True)
     price = Column(Integer, nullable=False)
-    image_url = Column(String(256), nullable=True) # СЮДА: Ссылка на фото или GIF в Telegram
-    is_ticket = Column(Boolean, default=False)     # СЮДА: Флаг, является ли товар лотерейным билетом
+    image_url = Column(String(256), nullable=True) # Ссылка на фото или GIF в Telegram
+    is_ticket = Column(Boolean, default=False)     # Флаг лотерейного билета
     is_deleted = Column(Boolean, default=False)
 
 class Inventory(Base):
@@ -56,20 +64,12 @@ class Giveaway(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     reward_type = Column(String(32), nullable=False)      # "rating" или "physical"
-    reward_value = Column(String(128), nullable=False)     # Приз (число или текст)
+    reward_value = Column(String(128), nullable=False)     # Награда (число или текст)
     winners_count = Column(Integer, default=1)            # Количество призовых мест
-    condition_type = Column(String(32), nullable=False)   # "title" или "ticket"
-    condition_value = Column(Integer, nullable=False)     # ID титула или ID товара-билета
+    condition_type = Column(String(32), nullable=False)   # "combo" для комбинированного режима
+    condition_value = Column(String(128), nullable=False)  # Пакуется как "title_id:ticket_id"
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-
-class GiveawayParticipant(Base):
-    __tablename__ = "giveaway_participants"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    giveaway_id = Column(Integer, ForeignKey("giveaways.id", ondelete="CASCADE"))
-    user_id = Column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"))
-    joined_at = Column(DateTime, default=datetime.utcnow)
 
 class ChatConfig(Base):
     __tablename__ = "chats_config"
@@ -92,7 +92,7 @@ class Order(Base):
     user_id = Column(BigInteger, nullable=False)
     source = Column(String(32), nullable=False)
     item_name = Column(String(128), nullable=False)
-    status = Column(String(32), nullable=False)
+    status = Column(String(32), nullable=False) # Хранит строковое значение OrderStatus
     delivery_data = Column(String(512), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
