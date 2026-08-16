@@ -4,7 +4,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, and_, func
 
 from config import settings
-from database.models import User, PromoChannel, ActivityLog
+from database.models import User, PromoChannel, ActivityLog, Order, OrderStatus
 
 router = Router(name="user_tasks_router")
 
