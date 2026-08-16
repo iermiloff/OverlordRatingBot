@@ -11,8 +11,8 @@ from database.models import Base
 from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.auth.py import AuthMiddleware  # убираем .py, пишем просто auth
 from bot.middlewares.auth import AuthMiddleware
-    dp.update.middleware(DbSessionMiddleware())
-    dp.update.middleware(AuthMiddleware())
+from bot.handlers.common import router as common_router
+
 
 # Настраиваем логирование, чтобы видеть состояние бота в консоли
 logging.basicConfig(
@@ -36,6 +36,8 @@ async def main():
     # Инициализируем диспетчер и включаем хранилище в оперативной памяти для FSM (сценариев)
     dp = Dispatcher(storage=MemoryStorage())
 
+    dp.update.middleware(DbSessionMiddleware())
+    dp.update.middleware(AuthMiddleware())
     # Вызываем создание таблиц перед запуском бота
     await init_db()
 
@@ -44,6 +46,7 @@ async def main():
     try:
         # Стираем все сообщения, которые пришли боту, пока он был выключен (чтобы не спамил старым)
         await bot.delete_webhook(drop_pending_updates=True)
+    dp.include_router(common_router)
         # Запускаем бесконечный цикл обработки обновлений
         await dp.start_polling(bot)
     finally:
