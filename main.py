@@ -8,6 +8,12 @@ from config import settings
 from database.connection import engine
 from database.models import Base
 
+from bot.middlewares.db_session import DbSessionMiddleware
+from bot.middlewares.auth.py import AuthMiddleware  # убираем .py, пишем просто auth
+from bot.middlewares.auth import AuthMiddleware
+    dp.update.middleware(DbSessionMiddleware())
+    dp.update.middleware(AuthMiddleware())
+
 # Настраиваем логирование, чтобы видеть состояние бота в консоли
 logging.basicConfig(
     level=logging.INFO,
