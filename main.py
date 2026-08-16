@@ -16,7 +16,6 @@ from bot.middlewares.activity_log import ActivityLogMiddleware
 # Импортируем централизованный сборщик роутеров
 from bot.handlers import get_main_router
 
-# Настраиваем логирование
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
@@ -47,27 +46,29 @@ async def main():
     # 1. Инициализация структуры БД
     await init_db()
 
-    # 2. Подключение OUTER Middlewares (выполняются до FSM и фильтров роутеров)
-    dp.update.outer_middleware(DbSessionMiddleware())
-    dp.update.outer_middleware(AuthMiddleware())
+    # 2. Регистрируем сессию БД и авторизацию для ОБЫЧНЫХ СООБЩЕНИЙ
+    dp.message.middleware(DbSessionMiddleware())
+    dp.message.middleware(AuthMiddleware())
 
-    # 3. Подключение INNER Middleware (выполняется только для текстовых сообщений)
+    # 3. Регистрируем сессию БД и авторизацию для НАЖАТИЙ ИНЛАЙН-КНОПОК
+    dp.callback_query.middleware(DbSessionMiddleware())
+    dp.callback_query.middleware(AuthMiddleware())
+
+    # 4. Логгер активности чатов ставим в самый конец цепочки сообщений
     dp.message.middleware(ActivityLogMiddleware())
 
-    # 4. Подключаем единый собранный роутер со всеми хэндлерами
+    # 5. Подключаем единый собранный роутер со всеми хэндлерами
     dp.include_router(get_main_router())
 
     logger.info(f"Запуск бота {settings.BOT_NAME} в режиме Polling...")
     
     try:
-        # Очищаем очередь сообщений, пришедших в офлайне
         await bot.delete_webhook(drop_pending_updates=True)
-        # Запускаем бесконечный асинхронный цикл прослушивания Telegram
         await dp.start_polling(bot)
     finally:
-        # Корректно закрываем сессию бота при остановке контейнера
         await bot.session.close()
 
 if __name__ == "__main__":
     asyncio.run(main())
+
 
