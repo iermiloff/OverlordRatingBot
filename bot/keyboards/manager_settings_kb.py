@@ -16,6 +16,7 @@ def get_settings_main_keyboard(chats: list) -> InlineKeyboardMarkup:
         
     # Кнопка добавления нового партнерского задания
     buttons.append([
-        InlineKeyboardButton(text="➕ Добавить промо-канал", callback_data="mg_promo_add")
+        InlineKeyboardButton(text="➕ Добавить промо-канал", callback_data="mg_promo_add"),
+        InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"mg_promo_del:{promo.id}")
     ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
