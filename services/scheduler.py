@@ -9,7 +9,7 @@ from database.connection import AsyncSessionLocal
 from database.models import Giveaway, User, ChatConfig, ShopItem, Inventory
 
 logger = logging.getLogger(__name__)
-scheduler = AsyncScheduler()
+scheduler = AsyncIOScheduler()
 
 async def check_and_process_giveaways(bot):
     """Каждоминутный фоновый воркер для проверки расписания лотерей."""
