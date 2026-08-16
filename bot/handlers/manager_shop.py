@@ -43,13 +43,13 @@ async def cmd_manager_shop(message: Message, is_manager: bool, db_session: Async
     if not is_manager: return
     await refresh_manager_shop(message, db_session)
 
-@router.types.CallbackQuery(F.data == "mg_shop_back")
+@router.callback_query(F.data == "mg_shop_back")
 async def process_mg_shop_back(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     await refresh_manager_shop(callback, db_session)
     await callback.answer()
 
-@router.types.CallbackQuery(F.data.startswith("mg_shop_view:"))
+@router.callback_query(F.data.startswith("mg_shop_view:"))
 async def process_mg_shop_view(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     item_id = int(callback.data.split(":")[1])
@@ -70,8 +70,8 @@ async def process_mg_shop_view(callback: CallbackQuery, is_manager: bool, db_ses
     )
     await callback.message.edit_text(text, reply_markup=get_item_admin_keyboard(item.id), parse_mode="Markdown")
     await callback.answer()
-
-@router.types.CallbackQuery(F.data.startswith("mg_shop_del:"))
+    
+@router.callback_query(F.data.startswith("mg_shop_del:"))
 async def process_mg_shop_del(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     item_id = int(callback.data.split(":")[1])
@@ -86,7 +86,7 @@ async def process_mg_shop_del(callback: CallbackQuery, is_manager: bool, db_sess
 
 # --- ПОШАГОВЫЙ СЦЕНАРИЙ ДОБАВЛЕНИЯ ТОВАРА (FSM) ---
 
-@router.types.CallbackQuery(F.data == "mg_shop_add")
+@router.callback_query(F.data == "mg_shop_add")
 async def process_mg_shop_add_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     await state.set_state(ManagerShopCreate.waiting_for_name)
@@ -143,7 +143,7 @@ async def process_item_price(message: Message, state: FSMContext, db_session: As
     await message.answer(f"🎉 Товар **{new_item.name}** успешно добавлен и выставлен на витрину магазина!")
     await refresh_manager_shop(message, db_session)
 
-@router.types.CallbackQuery(F.data == "mg_shop_cancel")
+@router.callback_query(F.data == "mg_shop_cancel")
 async def process_mg_shop_cancel(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     await state.clear()
     await callback.message.edit_text("❌ Создание товара отменено.")
