@@ -12,16 +12,15 @@ from bot.keyboards.manager_giveaways_kb import (
     get_giveaways_main_keyboard,
     get_ga_reward_type_keyboard,
     get_ga_condition_type_keyboard,
-    get_ga_tickets_keyboard
+    get_ga_tickets_keyboard,
+    get_ga_titles_choice_keyboard  # Подключаем новую клавиатуру
 )
-from bot.keyboards.manager_activities_kb import get_titles_choice_keyboard
 from bot.states import ManagerGiveawaySetup
 
 router = Router(name="manager_giveaways_router")
 
 async def refresh_giveaways_panel(callback_or_message, session: AsyncSession):
     """Обновляет состояние экранной панели розыгрышей менеджера с выводом расписания."""
-    # Ищем розыгрыши, которые еще не завершились
     ga_q = select(Giveaway).where(Giveaway.status.in_(["created", "announced"])).order_by(Giveaway.id.desc())
     active_ga = (await session.execute(ga_q)).scalar_one_or_none()
 
@@ -47,7 +46,7 @@ async def refresh_giveaways_panel(callback_or_message, session: AsyncSession):
             f"▪️ **Призовых мест:** {active_ga.winners_count}\n"
             f"📢 **Время анонса:** `{active_ga.announce_at.strftime('%d.%m.%Y %H:%M')}`\n"
             f"🛑 **Время финала:** `{active_ga.finalize_at.strftime('%d.%m.%Y %H:%M')}`\n\n"
-            f"🔒 **Критерий автоматического отбора:**\n"
+            f"🔒 **Комбинированные критерии отбора:**\n"
             f"   1. Титул от **'{t_name}'** и выше\n"
             f"   2. Наличие билета **'{ticket_name}'** в инвентаре\n\n"
             "ℹ️ _Бот сам опубликует анонс и подведет итоги в чатах по расписанию через воркер!_"
@@ -115,7 +114,7 @@ async def process_ga_reward_value(message: Message, state: FSMContext):
     await message.answer("👥 **Конструктор розыгрышей [Шаг 3/7]**\n\nУкажите **количество призовых мест** (сколько будет победителей):")
 
 
-@router.message(ManagerGiveawaySetup.waiting_for_winners_count)
+@router.message(ManagerGiveawaySetup.winners_count)
 async def process_ga_winners_count(message: Message, state: FSMContext):
     text_input = message.text.strip()
     if not text_input.isdigit() or int(text_input) <= 0:
@@ -125,14 +124,16 @@ async def process_ga_winners_count(message: Message, state: FSMContext):
     await state.update_data(ga_winners_count=int(text_input))
     await state.set_state(ManagerGiveawaySetup.waiting_for_condition_type)
     
+    # ИСПРАВЛЕНО: Теперь вызывается уникальная клавиатура титулов строго для розыгрышей
     await message.answer(
         "🎖️ **Конструктор розыгрышей [Шаг 4/7]**\n\n"
         "Задайте **минимальный титул**, которым должен обладать пользователь для участия:",
-        reply_markup=get_titles_choice_keyboard(settings.parsed_titles)
+        reply_markup=get_ga_titles_choice_keyboard(settings.parsed_titles)
     )
 
 
-@router.callback_query(ManagerGiveawaySetup.waiting_for_condition_type, F.data.startswith("act_save_title:"))
+# ИСПРАВЛЕНО: Ловим клик по уникальной кнопке ga_save_title строго внутри этого модуля!
+@router.callback_query(ManagerGiveawaySetup.waiting_for_condition_type, F.data.startswith("ga_save_title:"))
 async def process_ga_condition_title_chosen(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     title_id = int(callback.data.split(":")[1])
     await state.update_data(ga_cond_title_id=title_id)
@@ -174,7 +175,6 @@ async def process_ga_condition_ticket_chosen(callback: CallbackQuery, state: FSM
 async def process_ga_announce_time(message: Message, state: FSMContext):
     text_input = message.text.strip()
     try:
-        # Парсим строку в datetime объект
         dt_announce = datetime.strptime(text_input, "%d.%m.%Y %H:%M")
     except ValueError:
         await message.answer("❌ Ошибка! Неверный формат даты. Введите строго по шаблону `ДД.ММ.ГГГГ ЧЧ:ММ`:")
@@ -205,12 +205,10 @@ async def process_ga_finalize_time_and_save(message: Message, state: FSMContext,
         await message.answer("❌ Ошибка! Время финала не может быть раньше или равно времени анонса. Попробуйте еще раз:")
         return
 
-    # Собираем составное антифрод-условие "title_id:ticket_id"
     title_id = data.get("ga_cond_title_id")
     ticket_id = data.get("ga_cond_ticket_id")
     combo_value = f"{title_id}:{ticket_id}"
 
-    # Создаем запись в PostgreSQL со статусом "created"
     new_ga = Giveaway(
         reward_type=data.get("ga_reward_type"),
         reward_value=data.get("ga_reward_value"),
@@ -227,9 +225,9 @@ async def process_ga_finalize_time_and_save(message: Message, state: FSMContext,
 
     from bot.keyboards.menu_kb import get_back_to_menu_keyboard
     await message.answer(
-        f"🎉 **Розыгрыш успешно запланирован в БД!**\n\n"
+        f"🎉 **Комбинированный розыгрыш успешно запланирован в БД!**\n\n"
         f"Бот автоматически опубликует условия в чаты в назначенное время, "
-        f"заблокирует призовой фонд, просчитает билеты и выдаст итоги без ручного вмешательства менеджеров.",
+        f"а затем через APScheduler рассчитает веса билетов участников и выдаст итоги.",
         reply_markup=get_back_to_menu_keyboard(to_manager=True)
     )
     await refresh_giveaways_panel(message, db_session)
