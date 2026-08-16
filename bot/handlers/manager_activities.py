@@ -64,11 +64,23 @@ async def cmd_manager_activities(message_or_query, is_manager: bool, db_session:
         "👇 Используйте кнопки для изменения параметров:"
     )
     
+    # ИСПРАВЛЕНО: Добавляем кнопку возврата в главное меню в самый низ основной клавиатуры активностей
+    base_kb = get_activities_main_keyboard()
+    # Модифицируем инлайн-сетку на лету, добавляя нижний ряд спасения меню
+    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+    back_btn = InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")
+    
+    # Проверяем, нет ли уже кнопки возврата в сетке, чтобы не дублировать её
+    has_back = any(btn.callback_data == "main_menu_manager" for row in base_kb.inline_keyboard for btn in row)
+    if not has_back:
+        base_kb.inline_keyboard.append([back_btn])
+
     if isinstance(message_or_query, Message):
-        await message_or_query.answer(text, reply_markup=get_activities_main_keyboard(), parse_mode="Markdown")
+        await message_or_message = message_or_query
+        await message_or_query.answer(text, reply_markup=base_kb, parse_mode="Markdown")
     else:
         try:
-            await message_or_query.message.edit_text(text, reply_markup=get_activities_main_keyboard(), parse_mode="Markdown")
+            await message_or_query.message.edit_text(text, reply_markup=base_kb, parse_mode="Markdown")
         except Exception:
             await message_or_query.answer()
 
@@ -104,7 +116,6 @@ async def process_quiet_hours_input(message: Message, state: FSMContext):
         "🎲 **Настройка таймера [Шаг 2/2]**\n\n"
         "Введите **диапазон рандома в часах** (в течение какого времени после сна сундук имеет шанс выпасть. Например, `12`):"
     )
-
 @router.message(ManagerChestSettings.waiting_for_random_hours)
 async def process_random_hours_input(message: Message, state: FSMContext, db_session: AsyncSession):
     if not message.text.strip().isdigit():
