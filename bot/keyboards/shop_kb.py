@@ -1,7 +1,8 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import settings
 
 def get_shop_item_keyboard(item_id: int, page: int, has_next: bool, price: int) -> InlineKeyboardMarkup:
-    """Генерирует инлайн-кнопки управления карточкой товара."""
+    """Генерирует инлайн-кнопки управления карточкой товара с кнопкой Назад."""
     buttons = []
     
     # Ряд навигации (Назад / Вперед)
@@ -16,7 +17,12 @@ def get_shop_item_keyboard(item_id: int, page: int, has_next: bool, price: int) 
         
     # Кнопка покупки конкретного товара
     buttons.append([
-        InlineKeyboardButton(text=f"🛒 Купить за {price}", callback_data=f"shop_buy:{item_id}:{page}")
+        InlineKeyboardButton(text=f"🛒 Купить за {price} {settings.CURRENCY_NAME}", callback_data=f"shop_buy:{item_id}:{page}")
+    ])
+    
+    # Кнопка возврата в главное пользовательское меню (спасение от тупиков)
+    buttons.append([
+        InlineKeyboardButton(text="↩️ Вернуться в главное меню", callback_data="main_menu_user")
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
