@@ -71,6 +71,13 @@ class Giveaway(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class PromoChannel(Base):
+    """Модель партнерских каналов для обязательных подписок."""
+    __tablename__ = "promo_channels"
+    id = Column(BigInteger, primary_key=True)  # Telegram ID канала
+    invite_link = Column(String(256), nullable=False)
+    reward = Column(Integer, default=50)
+
 class ChatConfig(Base):
     __tablename__ = "chats_config"
     id = Column(BigInteger, primary_key=True)
