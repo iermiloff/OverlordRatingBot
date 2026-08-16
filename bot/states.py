@@ -15,3 +15,8 @@ class ManagerActivitySetup(StatesGroup):
     waiting_for_reward_type = State()   # Выбор типа: "rating" или "physical"
     waiting_for_reward_value = State()  # Количество поинтов или название мерча
     waiting_for_reward_weight = State() # Вес/Шанс выпадения (дробное число)
+
+class ManagerSettingsPromo(StatesGroup):
+    waiting_for_channel_id = State()     # Ожидание ID канала (например, -100123456789)
+    waiting_for_invite_link = State()    # Ожидание инвайт-ссылки
+    waiting_for_task_reward = State()    # Ожидание суммы награды за подписку
