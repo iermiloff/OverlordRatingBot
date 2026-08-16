@@ -43,16 +43,16 @@ async def cmd_manager_activities(message: Message, is_manager: bool, db_session:
 
     text = (
         "🎁 **Управление игровыми механиками чата**\n\n"
-        "Здесь вы можете настраивать интерактив в группах без кодинга и SSH.\n\n"
+        "Здесь вы можете настраивать интерактив in группах без кодинга и SSH.\n\n"
         f"📋 **Текущие настройки сундука:**\n"
         f"▪️ Цена открытия: **{sys_settings.chest_open_price}** {settings.CURRENCY_NAME}\n"
         f"▪️ Минимальный титул: **{title_name}**\n"
-        f"📦 Уникальных наград в пуле: **{total_rewards}**\n\n"
+        f"📦 Уникальных наград in пуле: **{total_rewards}**\n\n"
         "👇 Используйте кнопки для изменения параметров или запуска интерактивов:"
     )
     await message.answer(text, reply_markup=get_activities_main_keyboard(), parse_mode="Markdown")
 
-@router.types.CallbackQuery(F.data == "act_clear_rewards")
+@router.callback_query(F.data == "act_clear_rewards")
 async def process_clear_rewards(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     from sqlalchemy import delete
@@ -63,13 +63,13 @@ async def process_clear_rewards(callback: CallbackQuery, is_manager: bool, db_se
     try: await callback.message.delete()
     except Exception: pass
 
-# --- СЦЕНАРИИ НАСТРОЙКИ СУНДУКА (ЦЕНА И ТИТУЛ) ---
+# --- СТАРТ НАСТРОЕК СУНДУКА (ЦЕНА И ТИТУЛ) ---
 
-@router.types.CallbackQuery(F.data == "act_set_price")
+@router.callback_query(F.data == "act_set_price")
 async def process_set_price_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     await state.set_state(ManagerChestSettings.waiting_for_chest_price)
-    await callback.message.answer(f"💳 **Введите новую стоимость открытия сундука** в валюте {settings.CURRENCY_NAME} (целое число):")
+    await callback.message.answer(f"💳 **Введите новую стоимость открытия сундука** in валюте {settings.CURRENCY_NAME} (целое число):")
     await callback.answer()
 
 @router.message(ManagerChestSettings.waiting_for_chest_price)
@@ -87,7 +87,7 @@ async def process_save_price(message: Message, state: FSMContext, db_session: As
     await message.answer(f"✅ Стоимость открытия сундука успешно изменена на **{text_input}** {settings.CURRENCY_NAME}!")
     await cmd_manager_activities(message, is_manager=True, db_session=db_session)
 
-@router.types.CallbackQuery(F.data == "act_set_title")
+@router.callback_query(F.data == "act_set_title")
 async def process_set_title_start(callback: CallbackQuery, is_manager: bool):
     if not is_manager: return
     titles = settings.parsed_titles
@@ -97,7 +97,7 @@ async def process_set_title_start(callback: CallbackQuery, is_manager: bool):
     )
     await callback.answer()
 
-@router.types.CallbackQuery(F.data.startswith("act_save_title:"))
+@router.callback_query(F.data.startswith("act_save_title:"))
 async def process_save_title(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     title_id = int(callback.data.split(":"))
@@ -144,7 +144,7 @@ async def process_send_chest_now(callback: CallbackQuery, is_manager: bool, db_s
             sent_count += 1
         except Exception: pass
 
-    await callback.answer(f"🚀 Сундук заброшен in {sent_count} chat(s)!", show_alert=True)
+    await callback.answer(f"🚀 Сундук заброшен в {sent_count} чат(ов)!", show_alert=True)
 
 # --- МЕХАНИКА: МГНОВЕННЫЙ РОЗЫГРЫШ ---
 
@@ -249,12 +249,10 @@ async def process_act_cancel(callback: CallbackQuery, state: FSMContext):
 async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
     sys_settings = await get_sys_settings(db_session)
 
-    # 1. Валидация баланса на стоимость открытия
     if db_user.current_rating < sys_settings.chest_open_price:
         await callback.answer(f"❌ Недостаточно средств! Стоимость открытия: {sys_settings.chest_open_price} {settings.CURRENCY_NAME}.", show_alert=True)
         return
 
-    # 2. Валидация по титулу
     titles = settings.parsed_titles
     user_title_id = 1
     for t in sorted(titles.values(), key=lambda x: x.min_rating, reverse=True):
@@ -268,23 +266,18 @@ async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_ses
         await callback.answer(f"🔒 Доступ ограничен! Требуется титул от '{required_name}' и выше.", show_alert=True)
         return
 
-    # 3. Race Condition защита
     try:
         await callback.message.edit_text(
-            f"🔒 **Секретный сундук успешно открыт!** 🔒\n\n"
-            f"👤 Счастливчик: {callback.from_user.mention_html()}\n"
-            f"🎉 Награда выдана в личный кабинет победителя!",
+            f"🔒 **Секретный сундук успешно открыт!** 🔒\n\n👤 Счастливчик: {callback.from_user.mention_html()}\n🎉 Награда выдана в личный кабинет победителя!",
             reply_markup=None, parse_mode="HTML"
         )
     except Exception:
         await callback.answer("😢 Ой! Кто-то оказался быстрее тебя и уже забрал этот сундук!", show_alert=True)
         return
 
-    # 4. Списание за ключ
     if sys_settings.chest_open_price > 0:
         db_user.current_rating -= sys_settings.chest_open_price
 
-    # 5. Выдача награды
     rewards_result = await db_session.execute(select(ChestReward))
     rewards = rewards_result.scalars().all()
 
@@ -334,4 +327,3 @@ async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_ses
             except Exception: pass
 
     await callback.answer()
-
