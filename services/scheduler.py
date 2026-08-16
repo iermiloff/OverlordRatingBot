@@ -47,16 +47,24 @@ async def check_and_process_giveaways(bot):
         finalize_q = select(Giveaway).where(and_(Giveaway.status == "announced", Giveaway.finalize_at <= now))
         to_finalize = (await session.execute(finalize_q)).scalars().all()
         
+        # НАЙДИ ЭТОТ БЛОК ВНУТРИ services/scheduler.py в секции финала:
         for ga in to_finalize:
             parts = str(ga.condition_value).split(":")
-            title_id, ticket_id = int(parts[0]), int(parts[1])
+            title_id, ticket_id = int(parts), int(parts)
             min_rating = settings.parsed_titles.get(title_id).min_rating
 
-            # Выборка подходящих пользователей
-            users_q = select(User, Inventory.quantity).join(Inventory, Inventory.user_id == User.tg_id).where(and_(
-                User.lifetime_rating >= min_rating, Inventory.item_id == ticket_id, Inventory.quantity >= 1, User.is_banned == False
-            ))
-            eligible_records = (await session.execute(users_q)).all()
+            # АДАПТИВНАЯ ВЫБОРКА УЧАСТНИКОВ ИЗ БАЗЫ
+            if ticket_id == 0:
+                # Классический бесплатный розыгрыш: берем всех не забаненных пользователей с нужным титулом
+                users_q = select(User).where(and_(User.lifetime_rating >= min_rating, User.is_banned == False))
+                query_res = await session.execute(users_q)
+                eligible_records = [(u, 1) for u in query_res.scalars().all()] # у каждого ровно 1 купон (шанс)
+            else:
+                # Комбинированный режим: звание + билет
+                users_q = select(User, Inventory.quantity).join(Inventory, Inventory.user_id == User.tg_id).where(and_(
+                    User.lifetime_rating >= min_rating, Inventory.item_id == ticket_id, Inventory.quantity >= 1, User.is_banned == False
+                ))
+                eligible_records = (await session.execute(users_q)).all()
 
             if not eligible_records:
                 ga.status = "finished"
@@ -64,36 +72,44 @@ async def check_and_process_giveaways(bot):
 
             # Построение лотерейного барабана весов
             wheel = []
+            user_ticket_map = {}
             for user_obj, qty in eligible_records:
-                for _ in range(qty): wheel.append(user_obj)
+                user_ticket_map[user_obj.tg_id] = qty
+                for _ in range(qty): 
+                    wheel.append(user_obj)
 
             winners = []
             actual_winners_count = min(len(eligible_records), ga.winners_count)
             while len(winners) < actual_winners_count and wheel:
                 chosen = random.choice(wheel)
-                if chosen not in winners: winners.append(chosen)
+                if chosen not in winners: 
+                    winners.append(chosen)
                 wheel = [u for u in wheel if u.tg_id != chosen.tg_id]
 
-            # Начисление и списание
+            # Начисление призов и списание билетов (только если билет использовался!)
             mentions = []
             for w in winners:
-                inv_q = select(Inventory).where(and_(Inventory.user_id == w.tg_id, Inventory.item_id == ticket_id))
-                ticket = (await session.execute(inv_q)).scalar_one_or_none()
-                if ticket: ticket.quantity -= 1
+                if ticket_id > 0:
+                    inv_q = select(Inventory).where(and_(Inventory.user_id == w.tg_id, Inventory.item_id == ticket_id))
+                    ticket = (await session.execute(inv_q)).scalar_one_or_none()
+                    if ticket: 
+                        ticket.quantity -= 1
 
                 if ga.reward_type == "rating":
                     w.current_rating += int(ga.reward_value)
                     w.lifetime_rating += int(ga.reward_value)
-                mentions.append(f"👑 @{w.username or w.full_name}")
+                
+                qty_label = f" (купон из {user_ticket_map[w.tg_id]} билетов)" if ticket_id > 0 else ""
+                mentions.append(f"👑 @{w.username or w.full_name}{qty_label}")
 
-            # Публикация итогов
+            # Публикация итогов в активные чаты группы
             chats = (await session.execute(select(ChatConfig).where(ChatConfig.is_active == True))).scalars().all()
             winners_str = "\n".join(mentions)
             text_results = (
                 "🎉 **АВТОМАТИЧЕСКИЙ РОЗЫГРЫШ ЗАВЕРШЕН!** 🎉\n\n"
                 f"🎁 **Разыгранный приз:** {ga.reward_value}\n"
-                f"🏆 **Список случайных победителей по билетам:**\n{winners_str}\n\n"
-                "Поздравляем счастливчиков! Счастливые билеты списаны, а награды уже на балансах! 👏"
+                f"🏆 **Список наших случайных победителей:**\n{winners_str}\n\n"
+                "Поздравляем счастливчиков! Награды уже начислены в ваши личные кабинеты! 👏👏"
             )
             for chat in chats:
                 try: await bot.send_message(chat_id=chat.id, text=text_results, parse_mode="Markdown")
