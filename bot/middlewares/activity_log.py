@@ -42,9 +42,21 @@ class ActivityLogMiddleware(BaseMiddleware):
         chat_config = chat_check.scalar_one_or_none()
         
         if not chat_config:
-            chat_config = ChatConfig(id=event.chat.id, title=event.chat.title or "Группа")
+            link = None
+            try:
+                # Пытаемся экспортировать ссылку (работает, если бот админ в группе)
+                link = await event.bot.export_chat_invite_link(chat_id=event.chat.id)
+            except Exception:
+                pass  # Если прав нет, ссылка останется None
+
+            chat_config = ChatConfig(
+                id=event.chat.id, 
+                title=event.chat.title or "Группа",
+                invite_link=link
+            )
             session.add(chat_config)
             await session.commit()
+
         
         if not chat_config.is_active:
             return await handler(event, data)
