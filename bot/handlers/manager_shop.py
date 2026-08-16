@@ -149,3 +149,13 @@ async def process_mg_shop_cancel(callback: CallbackQuery, state: FSMContext, db_
     await callback.message.edit_text("❌ Создание товара отменено.")
     await refresh_manager_shop(callback, db_session)
     await callback.answer()
+
+def get_item_type_choice_keyboard() -> InlineKeyboardMarkup:
+    """Кнопки выбора: является ли создаваемый товар лотерейным билетом."""
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎒 Обычный мерч / товар", callback_data="mg_type:merch"),
+            InlineKeyboardButton(text="🎟️ Лотерейный билет", callback_data="mg_type:ticket")
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="mg_shop_cancel")]
+    ])
