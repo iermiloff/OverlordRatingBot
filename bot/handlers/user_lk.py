@@ -1,139 +1,120 @@
 from aiogram import Router, F
-from aiogram.types import Message
+from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-# Прямые импорты из корня и модулей
+# Прямые импорты из корня и модулей пакета
 from config import settings
-from database.models import User
+from database.models import User, ChatConfig
 from services.rating import get_user_title_name
+from bot.keyboards.menu_kb import get_back_to_menu_keyboard
 
 router = Router(name="user_lk_router")
 
-@router.message(F.text == "📊 Моя статистика")
-async def show_user_stats(message: Message, db_user: User, db_session: AsyncSession):
-    """Выводит текущие балансы, титул и позицию пользователя в глобальном топе."""
-    # Вычисляем позицию в топе по несгораемому lifetime_rating
-    # Считаем, сколько людей имеют рейтинг строго больше, чем у текущего юзера, и прибавляем 1
+@router.callback_query(F.data == "user_stats")
+async def show_user_stats_inline(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
+    """Экран статистики пользователя с бесшовной перерисовкой."""
+    # Вычисляем позицию в топе: считаем сколько людей набрали строго больше опыта за все время
     rank_query = select(func.count(User.tg_id)).where(User.lifetime_rating > db_user.lifetime_rating)
     rank_result = await db_session.execute(rank_query)
     user_rank = rank_result.scalar() + 1
 
-    # Получаем текстовое имя титула
+    # Динамически вычисляем имя звания по несгораемому рейтингу
     title_name = get_user_title_name(db_user.lifetime_rating)
 
     text = (
         f"📊 **Твоя статистика в {settings.BOT_NAME}**\n\n"
-        f"👤 Пользователь: {message.from_user.mention_html()}\n"
-        f"🎖️ Текущий титул: **{title_name}**\n"
-        f"🏆 Место в глобальном рейтинге: **#{user_rank}**\n\n"
-        f"💳 Доступный баланс: {settings.CURRENCY_EMOJI} **{db_user.current_rating} {settings.CURRENCY_NAME}**\n"
-        f"📈 Всего заработано за всё время: {settings.CURRENCY_EMOJI} **{db_user.lifetime_rating} {settings.CURRENCY_NAME}**\n\n"
-        f"ℹ️ _Трать доступный баланс в магазине, твой титул и место в топе от этого не изменятся!_"
+        f"👤 **Пользователь:** {callback.from_user.mention_html()}\n"
+        f"🎖️ **Текущий титул:** {title_name}\n"
+        f"🏆 **Глобальный рейтинг:** #{user_rank}\n\n"
+        f"💳 **Доступно для покупок:** {settings.CURRENCY_EMOJI} {db_user.current_rating} {settings.CURRENCY_NAME}\n"
+        f"📈 **Всего заработано:** {settings.CURRENCY_EMOJI} {db_user.lifetime_rating} {settings.CURRENCY_NAME}\n\n"
+        f"ℹ️ _Покупки в магазине списывают только доступный баланс. Твой титул и место в топе останутся неизменными!_"
     )
-    await message.answer(text, parse_mode="HTML")
+    
+    # Меняем текст старого сообщения и прикрепляем нижнюю Inline-кнопку «Назад»
+    await callback.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="HTML")
+    await callback.answer()
 
-
-@router.message(F.text == "🤝 Партнерская программа")
-async def show_referral_program(message: Message, db_user: User, db_session: AsyncSession):
-    """Выводит реферальную ссылку и детальную разбивку по приглашенным."""
-    bot_info = await message.bot.get_me()
-    # Формируем уникальную диплинк-ссылку для отслеживания
+@router.callback_query(F.data == "user_referrals")
+async def show_referral_program_inline(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
+    """Экран партнерской программы с генерацией уникальной deep-link ссылки."""
+    bot_info = await callback.bot.get_me()
     ref_link = f"https://t.me{bot_info.username}?start=ref_{db_user.tg_id}"
 
-    # Делаем три быстрых COUNT-запроса в рамках одной сессии
-    # 1. Всего приглашено
+    # Делаем три агрегирующих COUNT-запроса
     all_ref_q = select(func.count(User.tg_id)).where(User.referrer_id == db_user.tg_id)
     all_ref = (await db_session.execute(all_ref_q)).scalar()
 
-    # 2. В ожидании (кто еще не набрал нужный порог рейтинга)
-    pending_ref_q = select(func.count(User.tg_id)).where(
-        User.referrer_id == db_user.tg_id,
-        User.lifetime_rating < settings.REF_TARGET_RATING
-    )
-    pending_ref = (await db_session.execute(pending_ref_q)).scalar()
+    pending_q = select(func.count(User.tg_id)).where(User.referrer_id == db_user.tg_id, User.lifetime_rating < settings.REF_TARGET_RATING)
+    pending_ref = (await db_session.execute(pending_q)).scalar()
 
-    # 3. Успешные (кто набрал порог и за кого начислена награда)
-    success_ref_q = select(func.count(User.tg_id)).where(
-        User.referrer_id == db_user.tg_id,
-        User.lifetime_rating >= settings.REF_TARGET_RATING
-    )
-    success_ref = (await db_session.execute(success_ref_q)).scalar()
+    success_q = select(func.count(User.tg_id)).where(User.referrer_id == db_user.tg_id, User.lifetime_rating >= settings.REF_TARGET_RATING)
+    success_ref = (await db_session.execute(success_q)).scalar()
 
-    # Считаем суммарный доход от рефералов
     total_earned = success_ref * settings.REF_REWARD_RATING
 
     text = (
         f"🤝 **Партнерская программа**\n\n"
         f"Приглашай друзей и зарабатывай {settings.CURRENCY_EMOJI} **{settings.REF_REWARD_RATING} {settings.CURRENCY_NAME}** "
-        f"за каждого, кто проявит активность!\n\n"
-        f"💵 Награда начислится, когда твой друг наберет **{settings.REF_TARGET_RATING}** очков общего рейтинга.\n\n"
-        f"🔗 **Твоя реферальная ссылка:**\n<code>{ref_link}</code>\n\n"
+        f"за каждого активного участника!\n\n"
+        f"💵 Бонус начислится, когда твой реферал наберет **{settings.REF_TARGET_RATING}** общего опыта.\n\n"
+        f"🔗 **Твоя индивидуальная инвайт-ссылка:**\n<code>{ref_link}</code>\n\n"
         f"📊 **Статистика приглашений:**\n"
         f"▪️ Всего приглашено человек: **{all_ref}**\n"
-        f"▪️ В ожидании активации: **{pending_ref}**\n"
+        f"▪️ В ожидании активации (холд): **{pending_ref}**\n"
         f"▪️ Успешные рефералы: **{success_ref}**\n"
-        f"💰 Всего заработано на рефералах: **{total_earned} {settings.CURRENCY_NAME}**"
+        f"💰 Заработано за всё время: **{total_earned} {settings.CURRENCY_NAME}**"
     )
-    await message.answer(text, parse_mode="HTML")
+    await callback.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="HTML")
+    await callback.answer()
 
-
-@router.message(F.text == "🎖️ Список титулов")
-async def show_titles_list(message: Message, db_user: User):
-    """Выводит красивую иерархию титулов из .env и показывает прогресс текущего юзера."""
-    # Получаем распарсенный из .env словарь классов TitleInfo
+@router.callback_query(F.data == "user_titles")
+async def show_titles_list_inline(callback: CallbackQuery, db_user: User):
+    """Экран иерархии титулов из .env с расчетом прогресса до следующего уровня."""
     titles_config = settings.parsed_titles
     if not titles_config:
-        await message.answer("📭 Список титулов временно не настроен.")
+        await callback.answer("📭 Список титулов временно не настроен.")
         return
 
-    # Сортируем титулы строго по возрастанию порога рейтинга
+    # Упорядочиваем по возрастанию рейтинга
     sorted_titles = sorted(titles_config.values(), key=lambda x: x.min_rating)
-    
     current_title_name = get_user_title_name(db_user.lifetime_rating)
 
-    lines = ["🎖️ **Иерархия доступных титулов:**\n"]
+    lines = ["🎖️ **Иерархия доступных титулов в системе:**\n"]
     next_title = None
 
     for title in sorted_titles:
-        # Ставим маркер-галочку напротив титулов, которые юзер уже перерос
-        if db_user.lifetime_rating >= title.min_rating:
-            marker = "✅"
-        else:
-            marker = "🔒"
-            # Запоминаем первый заблокированный титул, как следующую цель
-            if next_title is None:
-                next_title = title
-
+        marker = "✅" if db_user.lifetime_rating >= title.min_rating else "🔒"
+        if db_user.lifetime_rating < title.min_rating and next_title is None:
+            next_title = title
         lines.append(f"{marker} **{title.name}** — от {title.min_rating} {settings.CURRENCY_NAME}")
 
-    lines.append(f"\n👤 Твой несгораемый рейтинг: **{db_user.lifetime_rating} {settings.CURRENCY_NAME}**")
+    lines.append(f"\n👤 Твой опыт за всё время: **{db_user.lifetime_rating} {settings.CURRENCY_NAME}**")
     lines.append(f"🏆 Твой текущий статус: **{current_title_name}**")
 
     if next_title:
         points_needed = next_title.min_rating - db_user.lifetime_rating
-        lines.append(f"🚀 До титула **{next_title.name}** осталось набрать: **{points_needed}** очков активности.")
+        lines.append(f"🚀 До титула **{next_title.name}** осталось набрать: **{points_needed}** очков.")
     else:
-        lines.append("👑 Поздравляем! Ты достиг максимального титула в системе!")
+        lines.append("👑 Поздравляем! Вы достигли максимального звания!")
 
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+    await callback.message.edit_text("\n".join(lines), reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="Markdown")
+    await callback.answer()
 
-from database.models import ChatConfig
-
-@router.message(F.text == "💬 Наши Чаты")
-async def show_active_chats_list(message: Message, db_session: AsyncSession):
-    """Выводит список групп, в которых включен учет активности и начисление рейтинга."""
+@router.callback_query(F.data == "user_chats")
+async def show_active_chats_list_inline(callback: CallbackQuery, db_session: AsyncSession):
+    """Экран официальных чатов с поддержкой кликабельных HTML-ссылок."""
     query = select(ChatConfig).where(ChatConfig.is_active == True).order_by(ChatConfig.title)
-    result = await db_session.execute(query)
-    active_chats = result.scalars().all()
+    active_chats = (await db_session.execute(query)).scalars().all()
 
     if not active_chats:
         text = (
             "💬 <b>Наши Чаты</b>\n\n"
-            "В данный момент нет подключенных групп для начисления рейтинга. "
-            "Менеджеры настроят их в ближайшее время! ⏳"
+            "В данный момент нет подключенных групп для учета активности. "
+            "Загляните сюда позже! ⏳"
         )
-        await message.answer(text, parse_mode="HTML")
+        await callback.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="HTML")
         return
 
     lines = [
@@ -143,14 +124,14 @@ async def show_active_chats_list(message: Message, db_session: AsyncSession):
     ]
 
     for idx, chat in enumerate(active_chats, start=1):
-        # Если ссылка есть в базе — делаем название кликабельным
+        # Если бот смог выгрузить ссылку чата, оборачиваем её в HTML тег
         if chat.invite_link:
             chat_name_html = f'<a href="{chat.invite_link}">{chat.title}</a>'
         else:
-            # Если ссылки нет (бот не админ) — выводим обычный текст
             chat_name_html = f"<b>{chat.title}</b>"
             
         lines.append(f"{idx}. 👥 {chat_name_html} — <i>Учет активности активен</i>")
 
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    await callback.message.edit_text("\n".join(lines), reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="HTML")
+    await callback.answer()
 
