@@ -11,7 +11,7 @@ from services.rating import process_user_activity
 
 class ActivityLogMiddleware(BaseMiddleware):
     def __init__(self):
-        # Локальный кэш кулдауна в оперативной памяти (User_ID -> Последний таймстамп начисления)
+        # Локальный кэш кулдауна начислений в ОЗУ (User_ID -> Timestamp)
         self.cooldowns: Dict[int, float] = {}
 
     async def __call__(
@@ -20,11 +20,12 @@ class ActivityLogMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        # Работаем только с текстовыми сообщениями внутри супергрупп или групп
-        if not isinstance(event, Message) or not event.chat.type in ["group", "supergroup"]:
+        # ЗАЩИТА: Если это не сообщение или сообщение отправлено в ЛС боту (private) —
+        # мы вообще ничего не делаем и мгновенно передаем управление дальше
+        if not isinstance(event, Message) or event.chat.type == "private":
             return await handler(event, data)
 
-        # Пропускаем, если текст отсутствует
+        # Пропускаем, если текста нет
         if not event.text:
             return await handler(event, data)
 
@@ -34,13 +35,12 @@ class ActivityLogMiddleware(BaseMiddleware):
         if not session or not db_user:
             return await handler(event, data)
 
-        # 1. Проверяем, разрешен ли учет активности в данном чате менеджером
+        # 1. Проверяем, включен ли чат менеджером
         chat_check = await session.execute(
             select(ChatConfig).where(ChatConfig.id == event.chat.id)
         )
         chat_config = chat_check.scalar_one_or_none()
         
-        # Если чата нет в конфиге, временно создаем его со статусом Active=True
         if not chat_config:
             chat_config = ChatConfig(id=event.chat.id, title=event.chat.title or "Группа")
             session.add(chat_config)
@@ -49,7 +49,7 @@ class ActivityLogMiddleware(BaseMiddleware):
         if not chat_config.is_active:
             return await handler(event, data)
 
-        # 2. Пишем сырой лог для будущей проверки системы анти-фрода
+        # 2. Логируем для анти-фрода
         raw_log = ActivityLog(
             user_id=event.from_user.id,
             chat_id=event.chat.id,
@@ -58,13 +58,12 @@ class ActivityLogMiddleware(BaseMiddleware):
         session.add(raw_log)
         await session.commit()
 
-        # 3. Кулдаун-контроль начисления рейтинга (защита от пулеметного спама)
+        # 3. Экономика и кулдауны
         now = time.time()
         user_id = event.from_user.id
         last_earned = self.cooldowns.get(user_id, 0.0)
 
         if now - last_earned >= settings.COOLDOWN_MESSAGE_SEC:
-            # Вызываем бизнес-логику начисления
             success = await process_user_activity(session, db_user, len(event.text))
             if success:
                 self.cooldowns[user_id] = now
