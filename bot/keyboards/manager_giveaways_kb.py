@@ -42,3 +42,15 @@ def get_ga_tickets_keyboard(tickets: list) -> InlineKeyboardMarkup:
         buttons.append([InlineKeyboardButton(text=f"🎟️ {t.name}", callback_data=f"ga_save_cond_ticket:{t.id}")])
     buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="ga_cancel")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_ga_titles_choice_keyboard(titles_config: dict) -> InlineKeyboardMarkup:
+    """Генерирует уникальную сетку титулов строго для конструктора РОЗЫГРЫШЕЙ."""
+    buttons = []
+    # Сортируем титулы по возрастанию необходимого рейтинга
+    for t_id, title in sorted(titles_config.items(), key=lambda x: x[1].min_rating):
+        buttons.append([
+            InlineKeyboardButton(text=f"🎖️ {title.name}", callback_data=f"ga_save_title:{t_id}")
+        ])
+    buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="ga_cancel")])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
