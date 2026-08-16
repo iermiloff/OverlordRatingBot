@@ -50,13 +50,13 @@ async def cmd_manager_users(message: Message, is_manager: bool, db_session: Asyn
     if not is_manager: return
     await send_users_page(message, db_session, page=1)
 
-@router.types.CallbackQuery(F.data.startswith("mg_users_page:"))
+@router.callback_query(F.data.startswith("mg_users_page:"))
 async def process_mg_users_page(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     page = int(callback.data.split(":")[1])
     await send_users_page(callback, db_session, page=page)
 
-@router.types.CallbackQuery(F.data.startswith("mg_user_view:"))
+@router.callback_query(F.data.startswith("mg_user_view:"))
 async def process_mg_user_view(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     _, user_id, page = callback.data.split(":")
@@ -86,7 +86,7 @@ async def process_mg_user_view(callback: CallbackQuery, is_manager: bool, db_ses
     await callback.message.edit_text(text, reply_markup=get_user_profile_keyboard(user.tg_id, page), parse_mode="Markdown")
     await callback.answer()
 
-@router.types.CallbackQuery(F.data.startswith("mg_user_rate:"))
+@router.callback_query(F.data.startswith("mg_user_rate:"))
 async def process_mg_user_rate_click(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     _, user_id, page = callback.data.split(":")
@@ -140,7 +140,7 @@ async def process_rating_input_manager(message: Message, state: FSMContext, db_s
     except Exception:
         pass
 
-@router.types.CallbackQuery(F.data.startswith("mg_user_gift:"))
+@router.callback_query(F.data.startswith("mg_user_gift:"))
 async def process_mg_user_gift_click(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     _, user_id, page = callback.data.split(":")
@@ -160,7 +160,7 @@ async def process_mg_user_gift_click(callback: CallbackQuery, is_manager: bool, 
         parse_mode="Markdown"
     )
 
-@router.types.CallbackQuery(F.data.startswith("mg_gift_confirm:"))
+@router.callback_query(F.data.startswith("mg_gift_confirm:"))
 async def process_mg_gift_confirm(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     _, user_id, item_id, page = callback.data.split(":")
