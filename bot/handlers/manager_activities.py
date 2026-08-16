@@ -191,12 +191,12 @@ async def process_add_reward_start(callback: CallbackQuery, is_manager: bool, st
     await state.set_state(ManagerActivitySetup.waiting_for_reward_type)
     await callback.message.answer("📦 **Настройка сундука [Шаг 1/3]**\n\nВыбери тип создаваемой награды:", reply_markup=get_reward_type_keyboard())
     await callback.answer()
-
+    
 @router.callback_query(ManagerActivitySetup.waiting_for_reward_type, F.data.startswith("act_type:"))
 async def process_reward_type_choice(callback: CallbackQuery, state: FSMContext):
-    chosen_type = callback.data.split(":")[2]
+    chosen_type = callback.data.split(":")[1]
     await state.update_data(reward_type=chosen_type)
-    await state.set_state(ManagerActivitySetup.waiting_for_reward_value)
+
     
     prompt = (
         "💎 Введите **количество рейтинга**, которое получит юзер (целое число):"
