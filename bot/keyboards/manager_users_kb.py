@@ -1,17 +1,16 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from config import settings
 
 def get_users_list_keyboard(users: list, page: int, has_next: bool) -> InlineKeyboardMarkup:
-    """Список пользователей в виде кнопок для выбора."""
+    """Список пользователей с обязательной кнопкой выхода в главное меню."""
     buttons = []
     
-    # Кнопка на каждого юзера
     for u in users:
         username_text = f" (@{u.username})" if u.username else ""
         buttons.append([
             InlineKeyboardButton(text=f"👤 {u.full_name}{username_text}", callback_data=f"mg_user_view:{u.tg_id}:{page}")
         ])
         
-    # Ряд навигации
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mg_users_page:{page-1}"))
@@ -20,6 +19,9 @@ def get_users_list_keyboard(users: list, page: int, has_next: bool) -> InlineKey
         
     if nav_row:
         buttons.append(nav_row)
+
+    # ИСПРАВЛЕНО: Менеджер больше не застрянет на экране списка пользователей
+    buttons.append([InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_user_profile_keyboard(user_id: int, page: int) -> InlineKeyboardMarkup:
@@ -31,7 +33,7 @@ def get_user_profile_keyboard(user_id: int, page: int) -> InlineKeyboardMarkup:
     ])
 
 def get_gift_items_keyboard(items: list, user_id: int, page: int) -> InlineKeyboardMarkup:
-    """Список товаров для бесплатной выдачи."""
+    """Список товаров для бесплатной выдачи подарка."""
     buttons = []
     for item in items:
         buttons.append([
