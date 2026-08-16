@@ -15,11 +15,9 @@ ITEMS_PER_PAGE = 1
 
 async def send_shop_page(message_or_query, session: AsyncSession, page: int = 1):
     """Универсальная функция для отрисовки страницы магазина."""
-    # Считаем только активные товары (is_deleted == False)
     count_query = select(func.count(ShopItem.id)).where(ShopItem.is_deleted == False)
     total_items = (await session.execute(count_query)).scalar()
 
-    # Защита от пустого списка (Empty State)
     if total_items == 0:
         text = "🛒 **Магазин товаров**\n\nВ данный момент витрина пуста. Менеджеры еще не добавили товары. Загляните позже!"
         if isinstance(message_or_query, Message):
@@ -28,7 +26,6 @@ async def send_shop_page(message_or_query, session: AsyncSession, page: int = 1)
             await message_or_query.message.edit_text(text, parse_mode="Markdown")
         return
 
-    # Извлекаем товар для текущей страницы
     offset_value = (page - 1) * ITEMS_PER_PAGE
     item_query = (
         select(ShopItem)
@@ -54,7 +51,6 @@ async def send_shop_page(message_or_query, session: AsyncSession, page: int = 1)
     if isinstance(message_or_query, Message):
         await message_or_query.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
     else:
-        # Чтобы избежать ошибок aiogram, если текст и кнопки идентичны при повторном клике
         try:
             await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         except Exception:
@@ -70,18 +66,16 @@ async def process_shop_page(callback: CallbackQuery, db_session: AsyncSession):
     await send_shop_page(callback, db_session, page=page)
 
 @router.callback_query(F.data.startswith("shop_buy:"))
-async def process_buy_click(callback: CallbackQuery, db_user: User, db_session: 
+async def process_buy_click(callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext):
     _, item_id, page = callback.data.split(":")
     item_id, page = int(item_id), int(page)
 
-    # Проверяем товар в базе
     item = await db_session.get(ShopItem, item_id)
     if not item or item.is_deleted:
         await callback.answer("❌ Данный товар более недоступен.", show_alert=True)
         await send_shop_page(callback, db_session, page=1)
         return
 
-    # Проверка баланса (сравниваем с текущим кошельком current_rating)
     if db_user.current_rating < item.price:
         await callback.answer(
             f"❌ Недостаточно средств! Вам не хватает {item.price - db_user.current_rating} {settings.CURRENCY_NAME}", 
@@ -89,7 +83,6 @@ async def process_buy_click(callback: CallbackQuery, db_user: User, db_session:
         )
         return
 
-    # Переводим пользователя в FSM-состояние заполнения данных доставки
     await state.set_state(OrderCheckout.waiting_for_delivery_data)
     await state.update_data(buy_item_id=item.id, buy_item_price=item.price)
 
@@ -103,7 +96,6 @@ async def process_buy_click(callback: CallbackQuery, db_user: User, db_session:
 
 @router.message(OrderCheckout.waiting_for_delivery_data)
 async def process_delivery_input(message: Message, state: FSMContext, db_session: AsyncSession):
-    """Получаем контакты, сохраняем в FSM и просим финально подтвердить заказ."""
     data = await state.get_data()
     item_id = data.get("buy_item_id")
     
@@ -113,7 +105,6 @@ async def process_delivery_input(message: Message, state: FSMContext, db_session
         await state.clear()
         return
 
-    # Сохраняем введенный адрес в FSM-хранилище
     await state.update_data(delivery_text=message.text)
 
     text = (
@@ -130,7 +121,7 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
     data = await state.get_data()
     delivery_text = data.get("delivery_text")
     
-    item_id = int(callback.data.split(":")[1])
+    item_id = int(callback.data.split(":"))
     item = await db_session.get(ShopItem, item_id)
     
     if not item or item.is_deleted:
@@ -138,16 +129,13 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
         await state.clear()
         return
 
-    # Повторная проверка баланса прямо в момент транзакции (Race Condition Protection)
     if db_user.current_rating < item.price:
         await callback.answer("❌ Недостаточно рейтинга!", show_alert=True)
         await state.clear()
         return
 
-    # Финансовая транзакция
-    db_user.current_rating -= item.price # Списываем оборотные поинты. ТИТУЛ НЕ СТРАДАЕТ!
+    db_user.current_rating -= item.price
 
-    # Создаем запись о заказе
     new_order = Order(
         user_id=db_user.tg_id,
         source="shop",
@@ -158,10 +146,8 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
     db_session.add(new_order)
     await db_session.commit()
 
-    # Очищаем состояние
     await state.clear()
 
-    # Оповещаем менеджеров о новом заказе
     for manager_id in settings.managers_list:
         try:
             await callback.bot.send_message(
@@ -173,7 +159,7 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
                 parse_mode="Markdown"
             )
         except Exception:
-            pass # Если менеджер не запустил бота лично, Telegram вернет ошибку, игнорируем ее
+            pass
 
     await callback.message.edit_text("🎉 **Заказ успешно оформлен!**\nМенеджер свяжется с вами для отправки мерча. Проверить статус можно в кнопке '🎁 Мои Награды'.")
     await callback.answer()
