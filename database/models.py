@@ -64,12 +64,17 @@ class Giveaway(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     reward_type = Column(String(32), nullable=False)      # "rating" или "physical"
-    reward_value = Column(String(128), nullable=False)     # Награда (число или текст)
-    winners_count = Column(Integer, default=1)            # Количество призовых мест
-    condition_type = Column(String(32), nullable=False)   # "combo" для комбинированного режима
-    condition_value = Column(String(128), nullable=False)  # Пакуется как "title_id:ticket_id"
-    is_active = Column(Boolean, default=True)
+    reward_value = Column(String(128), nullable=False)     # Приз
+    winners_count = Column(Integer, default=1)            # Места
+    condition_type = Column(String(32), nullable=False)   # "combo"
+    condition_value = Column(String(128), nullable=False)  # "title_id:ticket_id"
+    
+    # Новые поля для планировщика времени
+    announce_at = Column(DateTime, nullable=False)        # Время публикации требований
+    finalize_at = Column(DateTime, nullable=False)        # Время автоматического финала
+    status = Column(String(32), default="created")        # "created", "announced", "finished"
     created_at = Column(DateTime, default=datetime.utcnow)
+
 
 class PromoChannel(Base):
     """Модель партнерских каналов для обязательных подписок."""
