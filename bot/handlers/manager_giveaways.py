@@ -114,7 +114,7 @@ async def process_ga_reward_value(message: Message, state: FSMContext):
     await message.answer("👥 **Конструктор розыгрышей [Шаг 3/7]**\n\nУкажите **количество призовых мест** (сколько будет победителей):")
 
 
-@router.message(ManagerGiveawaySetup.winners_count)
+@router.message(ManagerGiveawaySetup.waiting_for_winners_count)
 async def process_ga_winners_count(message: Message, state: FSMContext):
     text_input = message.text.strip()
     if not text_input.isdigit() or int(text_input) <= 0:
