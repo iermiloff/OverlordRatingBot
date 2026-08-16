@@ -161,11 +161,10 @@ async def process_ga_condition_title_chosen(callback: CallbackQuery, state: FSMC
     )
     await callback.answer()
 
-# --- FSM СЦЕНАРИЙ: НАСТРОЙКА ВРЕМЕНИ И СОХРАНЕНИЕ ---
-
 @router.callback_query(ManagerGiveawaySetup.waiting_for_condition_value, F.data.startswith("ga_save_cond_ticket:"))
 async def process_ga_condition_ticket_chosen(callback: CallbackQuery, state: FSMContext):
-    ticket_id = int(callback.data.split(":"))
+    # ИСПРАВЛЕНО: Добавлен индекс [1] для получения ID билета из callback.data
+    ticket_id = int(callback.data.split(":")[1])
     await state.update_data(ga_cond_ticket_id=ticket_id)
     
     await state.set_state(ManagerGiveawaySetup.waiting_for_announce_time)
