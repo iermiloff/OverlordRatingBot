@@ -7,9 +7,11 @@ class ManagerUserActions(StatesGroup):
     waiting_for_rating_amount = State()  # Ожидание ввода числа для изменения баланса
 
 class ManagerShopCreate(StatesGroup):
-    waiting_for_name = State()         # Ожидание ввода названия товара
-    waiting_for_description = State()  # Ожидание описания товара
-    waiting_for_price = State()        # Ожидание стоимости
+    waiting_for_name = State()
+    waiting_for_description = State()
+    waiting_for_price = State()
+    waiting_for_media = State()
+    waiting_for_type = State()
 
 class ManagerActivitySetup(StatesGroup):
     waiting_for_reward_type = State()   # Выбор типа: "rating" или "physical"
