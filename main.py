@@ -14,6 +14,7 @@ from bot.middlewares.auth import AuthMiddleware
 from bot.handlers.common import router as common_router
 from bot.middlewares.activity_log import ActivityLogMiddleware
 from bot.handlers.chat_activity import router as chat_activity_router
+from bot.handlers.user_lk import router as user_lk_router
 
 
 # Настраиваем логирование, чтобы видеть состояние бота в консоли
@@ -50,6 +51,7 @@ async def main():
         await bot.delete_webhook(drop_pending_updates=True)
     dp.message.middleware(ActivityLogMiddleware())
     dp.include_router(common_router)
+    dp.include_router(user_lk_router)
     dp.include_router(chat_activity_router)
         # Запускаем бесконечный цикл обработки обновлений
         await dp.start_polling(bot)
