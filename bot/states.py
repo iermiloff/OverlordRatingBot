@@ -11,3 +11,7 @@ class ManagerShopCreate(StatesGroup):
     waiting_for_description = State()  # Ожидание описания товара
     waiting_for_price = State()        # Ожидание стоимости
 
+class ManagerActivitySetup(StatesGroup):
+    waiting_for_reward_type = State()   # Выбор типа: "rating" или "physical"
+    waiting_for_reward_value = State()  # Количество поинтов или название мерча
+    waiting_for_reward_weight = State() # Вес/Шанс выпадения (дробное число)
