@@ -20,6 +20,7 @@ from bot.handlers.user_tasks import router as user_tasks_router
 from bot.handlers.manager_users import router as manager_users_router
 from bot.handlers.manager_shop import router as manager_shop_router
 from bot.handlers.manager_orders import router as manager_orders_router
+from bot.handlers.manager_antifraud import router as manager_antifraud_router
 
 
 # Настраиваем логирование, чтобы видеть состояние бота в консоли
@@ -62,6 +63,7 @@ async def main():
     dp.include_router(manager_users_router)
     dp.include_router(manager_shop_router)
     dp.include_router(manager_orders_router)
+    dp.include_router(manager_antifraud_router)
     dp.include_router(chat_activity_router)
         # Запускаем бесконечный цикл обработки обновлений
         await dp.start_polling(bot)
