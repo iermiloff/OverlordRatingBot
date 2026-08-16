@@ -67,9 +67,13 @@ async def send_antifraud_page(message_or_query, session: AsyncSession, page: int
 
 
 @router.message(F.text == "🔒 Антифрод-система")
-async def cmd_manager_antifraud(message: Message, is_manager: bool, db_session: AsyncSession):
+@router.callback_query(F.data == "af_page:1") 
+async def cmd_manager_antifraud(message_or_query, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
-    await send_antifraud_page(message, db_session, page=1)
+    
+    # Меняем message на message_or_query, чтобы функция умела работать и с сообщениями, и с колбэками
+    await send_antifraud_page(message_or_query, db_session, page=1)
+
 
 
 router.callback_query(F.data.startswith("af_page:"))
