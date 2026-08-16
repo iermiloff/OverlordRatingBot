@@ -20,3 +20,7 @@ class ManagerSettingsPromo(StatesGroup):
     waiting_for_channel_id = State()     # Ожидание ID канала (например, -100123456789)
     waiting_for_invite_link = State()    # Ожидание инвайт-ссылки
     waiting_for_task_reward = State()    # Ожидание суммы награды за подписку
+    
+class ManagerChestSettings(StatesGroup):
+    waiting_for_chest_price = State()  # Ожидание ввода новой цены
+    waiting_for_chest_title = State()  # Ожидание выбора титула
