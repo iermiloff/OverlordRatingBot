@@ -1,60 +1,49 @@
 from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
-from aiogram.types import Message
+from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
 from config import settings
 from database.models import User
-from bot.keyboards.menu_kb import get_user_keyboard, get_manager_keyboard
+from bot.keyboards.menu_kb import get_user_inline_menu, get_manager_inline_menu
 
 router = Router(name="common_router")
 
+def get_welcome_text(user_name: str, is_manager: bool) -> str:
+    if is_manager:
+        return (
+            f"⚡ **Панель управления {settings.BOT_NAME}**\n"
+            f"Роль: **Менеджер**\n\n"
+            f"Используйте экранные кнопки ниже для управления экономикой, "
+            f"просмотра нарушителей и выдачи заказов."
+        )
+    return (
+        f"👋 **Добро пожаловать в {settings.BOT_NAME}!**\n\n"
+        f"Проявляй активность в наших чатах, зарабатывай {settings.CURRENCY_EMOJI} {settings.CURRENCY_NAME}, "
+        f"открывай титулы и покупай мерч!"
+    )
+
 @router.message(CommandStart())
-async def cmd_start(message: Message, db_user: User, db_session: AsyncSession):
-    """Обработчик команды /start."""
-    # Проверяем, является ли пользователь менеджером
-    is_manager = message.from_user.id in settings.managers_list
-
-    # Обработка реферального хвоста ссылки
-    args = message.text.split()
-    if len(args) > 1 and args[1].startswith("ref_"):
-        try:
-            referrer_id = int(args[1].replace("ref_", ""))
-            if referrer_id != message.from_user.id and db_user.referrer_id is None:
-                ref_check = await db_session.execute(
-                    select(User).where(User.tg_id == referrer_id)
-                )
-                if ref_check.scalar_one_or_none():
-                    db_user.referrer_id = referrer_id
-                    await db_session.commit()
-        except ValueError:
-            pass
-
-    # Выдача ЛК на основе роли
-    if is_manager:
-        await message.answer(
-            f"⚡ Добро пожаловать в панель управления {settings.BOT_NAME}!\n"
-            f"Вы авторизованы как **Менеджер**.\n\n"
-            f"Используйте нижнее меню для настройки магазина, сундуков и работы с пользователями.",
-            reply_markup=get_manager_keyboard(),
-            parse_mode="Markdown"
-        )
-    else:
-        await message.answer(
-            f"👋 Приветствуем в {settings.BOT_NAME}!\n\n"
-            f"Здесь ты можешь проявлять активность в наших чатах, получать за это "
-            f"валюту {settings.CURRENCY_EMOJI} {settings.CURRENCY_NAME}, "
-            f"открывать новые титулы и тратить баланс в магазине мерча!",
-            reply_markup=get_user_keyboard()
-        )
-
 @router.message(Command("menu"))
-async def cmd_menu(message: Message):
-    """Команда /menu для восстановления клавиатуры."""
+async def cmd_start(message: Message, db_user: User, db_session: AsyncSession):
     is_manager = message.from_user.id in settings.managers_list
-    if is_manager:
-        await message.answer("🎛️ Главное меню менеджера:", reply_markup=get_manager_keyboard())
-    else:
-        await message.answer("📱 Твое главное меню:", reply_markup=get_user_keyboard())
+    text = get_welcome_text(message.from_user.first_name, is_manager)
+    kb = get_manager_inline_menu() if is_manager else get_user_inline_menu()
+    
+    # Отправляем чистое сообщение с инлайн кнопками
+    await message.answer(text, reply_markup=kb, parse_mode="Markdown")
+
+@router.callback_query(F.data == "main_menu_user")
+async def back_to_user_menu(callback: CallbackQuery):
+    text = get_welcome_text(callback.from_user.first_name, is_manager=False)
+    await callback.message.edit_text(text, reply_markup=get_user_inline_menu(), parse_mode="Markdown")
+    await callback.answer()
+
+@router.callback_query(F.data == "main_menu_manager")
+async def back_to_manager_menu(callback: CallbackQuery):
+    text = get_welcome_text(callback.from_user.first_name, is_manager=True)
+    await callback.message.edit_text(text, reply_markup=get_manager_inline_menu(), parse_mode="Markdown")
+    await callback.answer()
+
 
