@@ -22,6 +22,7 @@ def get_main_router() -> Router:
     main_router.include_router(user_lk_router)
     main_router.include_router(shop_user_router)
     main_router.include_router(user_tasks_router)
+    main_router.include_router(user_inventory_router)
     main_router.include_router(manager_users_router)
     main_router.include_router(manager_shop_router)
     main_router.include_router(manager_orders_router)
