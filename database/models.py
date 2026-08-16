@@ -33,12 +33,14 @@ class User(Base):
     antifraud_reason = Column(Text, nullable=True)       # Обоснование для менеджера
     
     created_at = Column(DateTime, default=datetime.utcnow)
-
+    
 class ChatConfig(Base):
     __tablename__ = "chats_config"
     id = Column(BigInteger, primary_key=True)  # Telegram Chat ID группы
     title = Column(String(128), nullable=False)
     is_active = Column(Boolean, default=True)  # Считаем ли тут активность
+    invite_link = Column(String(256), nullable=True)  # Сюда бот сохранит ссылку
+
 
 class ShopItem(Base):
     __tablename__ = "shop_items"
