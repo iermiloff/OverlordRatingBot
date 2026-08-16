@@ -6,7 +6,7 @@ class OrderCheckout(StatesGroup):
 class ManagerUserActions(StatesGroup):
     waiting_for_rating_amount = State()  # Ожидание ввода числа для изменения баланса
 
-class ManagerShopCreate(StatesGroup):
+class ManagerShop(StatesGroup):
     waiting_for_name = State()
     waiting_for_description = State()
     waiting_for_price = State()
