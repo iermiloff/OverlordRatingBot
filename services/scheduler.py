@@ -1,7 +1,7 @@
 import logging
 import random
 from datetime import datetime
-from apscheduler.schedulers.asyncio import AsyncScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from sqlalchemy import select, and_
 
 from config import settings
