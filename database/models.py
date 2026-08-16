@@ -78,3 +78,10 @@ class ActivityLog(Base):
     chat_id = Column(BigInteger, nullable=False)
     message_length = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow) # Каждое сообщение пишется сюда
+
+class SystemSettings(Base):
+    __tablename__ = "system_settings"
+    
+    id = Column(Integer, primary_key=True, default=1)
+    chest_open_price = Column(Integer, default=0)    # Цена открытия сундука в рейтинге
+    chest_min_title_id = Column(Integer, default=1)  # ID минимального титула для открытия
