@@ -22,11 +22,15 @@ def get_ga_reward_type_keyboard() -> InlineKeyboardMarkup:
     ])
 
 def get_ga_condition_type_keyboard() -> InlineKeyboardMarkup:
-    """Выбор условия входа."""
+    """
+    Клавиатура шага 4. 
+    Поскольку мы внедрили комбинированный анти-абуз режим, менеджер нажимает 
+    кнопку подтверждения, и бот ведет его дальше по цепочке настройки.
+    """
     return InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🎖️ Ограничение по Титулу", callback_data="ga_cond:title"),
-            InlineKeyboardButton(text="🎟️ Вход по Билету", callback_data="ga_cond:ticket")
+            # Кнопка отправляет act_save_title, чтобы запустить хэндлер выбора звания
+            InlineKeyboardButton(text="🔒 Активировать защиту (Титул + Билет)", callback_data="ga_cond:title")
         ],
         [InlineKeyboardButton(text="❌ Отмена", callback_data="ga_cancel")]
     ])
