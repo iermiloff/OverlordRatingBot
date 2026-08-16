@@ -5,7 +5,6 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
-# Импорты конфигурации, моделей и клавиатур
 from config import settings
 from database.models import ChestReward, ChatConfig, User, Order, OrderStatus, SystemSettings
 from bot.states import ManagerActivitySetup, ManagerChestSettings
@@ -17,14 +16,12 @@ from bot.keyboards.manager_activities_kb import (
 
 router = Router(name="manager_activities_router")
 
-# --- СЕРВИСНЫЕ МЕТОДЫ ПАНЕЛИ ---
-
 async def get_sys_settings(session: AsyncSession) -> SystemSettings:
     """Универсальная функция получения глобальных настроек сундука из БД."""
     res = await session.execute(select(SystemSettings).where(SystemSettings.id == 1))
     sys_settings = res.scalar_one_or_none()
     if not sys_settings:
-        sys_settings = SystemSettings(id=1, chest_open_price=0, chest_min_title_id=1)
+        sys_settings = SystemSettings(id=1, chest_open_price=0, chest_min_title_id=1, chest_quiet_hours=12, chest_random_hours=12)
         session.add(sys_settings)
         await session.commit()
     return sys_settings
@@ -34,21 +31,37 @@ async def cmd_manager_activities(message: Message, is_manager: bool, db_session:
     if not is_manager: return
     
     sys_settings = await get_sys_settings(db_session)
-    count_q = select(func.count(ChestReward.id))
-    total_rewards = (await db_session.execute(count_q)).scalar()
+    
+    # Запрашиваем весь текущий призовой пул для отображения менеджеру
+    rewards_result = await db_session.execute(select(ChestReward).order_by(ChestReward.id))
+    rewards = rewards_result.scalars().all()
 
     titles = settings.parsed_titles
     title_info = titles.get(sys_settings.chest_min_title_id)
     title_name = title_info.name if title_info else "Новичок"
 
+    # Собираем текстовый список текущих наград в пуле
+    rewards_list_text = ""
+    if not rewards:
+        rewards_list_text = "   _(пул пуст, выдается утешительный приз: 15 поинтов)_\n"
+    else:
+        for idx, r in enumerate(rewards, start=1):
+            type_label = "💎 Рейтинг" if r.reward_type == "rating" else "🎒 Мерч"
+            rewards_list_text += f"   {idx}. {type_label}: *{r.value}* (вес: {r.weight})\n"
+
+    # Высчитываем для текста границы выпадения
+    max_time = sys_settings.chest_quiet_hours + sys_settings.chest_random_hours
+
     text = (
         "🎁 **Управление игровыми механиками чата**\n\n"
-        "Здесь вы можете настраивать интерактив in группах без кодинга и SSH.\n\n"
-        f"📋 **Текущие настройки сундука:**\n"
+        "📋 **Текущие настройки сундука:**\n"
         f"▪️ Цена открытия: **{sys_settings.chest_open_price}** {settings.CURRENCY_NAME}\n"
         f"▪️ Минимальный титул: **{title_name}**\n"
-        f"📦 Уникальных наград in пуле: **{total_rewards}**\n\n"
-        "👇 Используйте кнопки для изменения параметров или запуска интерактивов:"
+        f"⏱️ **Алгоритм таймера:** Сундук спит первые **{sys_settings.chest_quiet_hours}ч**, "
+        f"а затем случайно выпадает в диапазоне следующих **{sys_settings.chest_random_hours}ч** "
+        f"_(появится в чате между {sys_settings.chest_quiet_hours} и {max_time} часами с момента прошлого открытия)_\n\n"
+        f"📦 **Текущий призовой пул сундука:**\n{rewards_list_text}\n"
+        "👇 Используйте кнопки для изменения параметров:"
     )
     await message.answer(text, reply_markup=get_activities_main_keyboard(), parse_mode="Markdown")
 
@@ -63,39 +76,77 @@ async def process_clear_rewards(callback: CallbackQuery, is_manager: bool, db_se
     try: await callback.message.delete()
     except Exception: pass
 
-# --- СТАРТ НАСТРОЕК СУНДУКА (ЦЕНА И ТИТУЛ) ---
+# --- ПОШАГОВЫЙ ДИАЛОГ НАСТРОЙКИ РАНДОМ-ТАЙМЕРА (FSM) ---
+
+@router.callback_query(F.data == "act_set_timer")
+async def process_set_timer_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
+    if not is_manager: return
+    await state.set_state(ManagerChestSettings.waiting_for_quiet_hours)
+    await callback.message.answer(
+        "⏱️ **Настройка таймера [Шаг 1/2]**\n\n"
+        "Введите количество **гарантированных часов тишины** (время сна сундука, когда он точно не выпадет. Например, `24`):"
+    )
+    await callback.answer()
+
+@router.message(ManagerChestSettings.waiting_for_quiet_hours)
+async def process_quiet_hours_input(message: Message, state: FSMContext):
+    if not message.text.strip().isdigit():
+        await message.answer("❌ Введите корректное целое число часов:")
+        return
+    await state.update_data(quiet_h=int(message.text.strip()))
+    await state.set_state(ManagerChestSettings.waiting_for_random_hours)
+    await message.answer(
+        "🎲 **Настройка таймера [Шаг 2/2]**\n\n"
+        "Введите **диапазон рандома в часах** (в течение какого времени после сна сундук имеет шанс выпасть. Например, `12`):"
+    )
+
+@router.message(ManagerChestSettings.waiting_for_random_hours)
+async def process_random_hours_input(message: Message, state: FSMContext, db_session: AsyncSession):
+    if not message.text.strip().isdigit():
+        await message.answer("❌ Введите корректное целое число часов:")
+        return
+    
+    data = await state.get_data()
+    quiet_h = data.get("quiet_h")
+    random_h = int(message.text.strip())
+
+    sys_settings = await get_sys_settings(db_session)
+    sys_settings.chest_quiet_hours = quiet_h
+    sys_settings.chest_random_hours = random_h
+    await db_session.commit()
+    await state.clear()
+
+    await message.answer(f"✅ Рандомный алгоритм успешно перенастроен! Сундук появится в промежутке от {quiet_h} до {quiet_h + random_h} часов.")
+    await cmd_manager_activities(message, is_manager=True, db_session=db_session)
+
+# --- ИЗМЕНЕНИЕ СТОИМОСТИ КЛЮЧА И ТИТУЛА ---
 
 @router.callback_query(F.data == "act_set_price")
 async def process_set_price_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     await state.set_state(ManagerChestSettings.waiting_for_chest_price)
-    await callback.message.answer(f"💳 **Введите новую стоимость открытия сундука** in валюте {settings.CURRENCY_NAME} (целое число):")
+    await callback.message.answer(f"💳 Введите стоимость открытия сундука в {settings.CURRENCY_NAME}:")
     await callback.answer()
 
 @router.message(ManagerChestSettings.waiting_for_chest_price)
 async def process_save_price(message: Message, state: FSMContext, db_session: AsyncSession):
-    text_input = message.text.strip()
-    if not text_input.isdigit():
-        await message.answer("❌ Ошибка! Введите корректное целое число:")
+    if not message.text.strip().isdigit():
+        await message.answer("❌ Введите целое число:")
         return
-
     sys_settings = await get_sys_settings(db_session)
-    sys_settings.chest_open_price = int(text_input)
+    sys_settings.chest_open_price = int(message.text.strip())
     await db_session.commit()
     await state.clear()
-
-    await message.answer(f"✅ Стоимость открытия сундука успешно изменена на **{text_input}** {settings.CURRENCY_NAME}!")
+    await message.answer("✅ Стоимость ключа успешно сохранена!")
     await cmd_manager_activities(message, is_manager=True, db_session=db_session)
 
 @router.callback_query(F.data == "act_set_title")
 async def process_set_title_start(callback: CallbackQuery, is_manager: bool):
     if not is_manager: return
-    titles = settings.parsed_titles
-    await callback.message.answer(
-        "🎖️ **Выберите минимальный титул**, начиная с которого пользователи смогут открывать сундук:",
-        reply_markup=get_titles_choice_keyboard(titles)
-    )
+    await callback.message.answer("🎖️ Выберите минимальный титул для открытия сундука:", reply_markup=get_titles_choice_keyboard(settings.parsed_titles))
     await callback.answer()
+
+# --- ПРОДОЛЖЕНИЕ ИЗМЕНЕНИЯ ТИТУЛА ---
 
 @router.callback_query(F.data.startswith("act_save_title:"))
 async def process_save_title(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
@@ -191,12 +242,12 @@ async def process_add_reward_start(callback: CallbackQuery, is_manager: bool, st
     await state.set_state(ManagerActivitySetup.waiting_for_reward_type)
     await callback.message.answer("📦 **Настройка сундука [Шаг 1/3]**\n\nВыбери тип создаваемой награды:", reply_markup=get_reward_type_keyboard())
     await callback.answer()
-    
+
 @router.callback_query(ManagerActivitySetup.waiting_for_reward_type, F.data.startswith("act_type:"))
 async def process_reward_type_choice(callback: CallbackQuery, state: FSMContext):
     chosen_type = callback.data.split(":")[1]
     await state.update_data(reward_type=chosen_type)
-
+    await state.set_state(ManagerActivitySetup.waiting_for_reward_value)
     
     prompt = (
         "💎 Введите **количество рейтинга**, которое получит юзер (целое число):"
@@ -268,7 +319,9 @@ async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_ses
 
     try:
         await callback.message.edit_text(
-            f"🔒 **Секретный сундук успешно открыт!** 🔒\n\n👤 Счастливчик: {callback.from_user.mention_html()}\n🎉 Награда выдана в личный кабинет победителя!",
+            f"🔒 **Секретный сундук успешно открыт!** 🔒\n\n"
+            f"👤 Счастливчик: {callback.from_user.mention_html()}\n"
+            f"🎉 Награда выдана в личный кабинет победителя!",
             reply_markup=None, parse_mode="HTML"
         )
     except Exception:
@@ -292,7 +345,7 @@ async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_ses
 
     population = [r for r in rewards]
     weights = [r.weight for r in rewards]
-    win_reward = random.choices(population, weights=weights, k=1)[0]
+    win_reward = random.choices(population, weights=weights, k=1)[0] # ИСПРАВЛЕНО: берем сам объект из списка
 
     if win_reward.reward_type == "rating":
         amount = int(win_reward.value)
@@ -320,7 +373,7 @@ async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_ses
         for manager_id in settings.managers_list:
             try:
                 await callback.bot.send_message(
-                    chat_id=manager_id,
+                    manager_id,
                     text=f"📥 **Сундук чата:** @{db_user.username or db_user.tg_id} выиграл мерч *{win_reward.value}*.",
                     parse_mode="Markdown"
                 )
