@@ -28,10 +28,12 @@ class ManagerChestSettings(StatesGroup):
     waiting_for_chest_title = State()
     waiting_for_quiet_hours = State()   # Шаг 1: Время сна
     waiting_for_random_hours = State()  # Шаг 2: Диапазон рандома
-
+    
 class ManagerGiveawaySetup(StatesGroup):
-    waiting_for_reward_type = State()   # Тип приза (рейтинг / мерч)
-    waiting_for_reward_value = State()  # Значение приза (сумма или текст)
-    waiting_for_winners_count = State() # Количество призовых мест
-    waiting_for_condition_type = State() # Условие участия (титул / билет)
-    waiting_for_condition_value = State() # Выбор конкретного титула или билета
+    waiting_for_reward_type = State()
+    waiting_for_reward_value = State()
+    waiting_for_winners_count = State()
+    waiting_for_condition_type = State()
+    waiting_for_condition_value = State()
+    waiting_for_announce_time = State()  # Шаг для времени анонса
+    waiting_for_finalize_time = State()  # Шаг для времени финала
