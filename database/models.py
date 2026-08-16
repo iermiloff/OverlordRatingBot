@@ -26,6 +26,7 @@ class User(Base):
     is_suspicious = Column(Boolean, default=False)
     antifraud_reason = Column(String(256), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
+    timezone = Column(String(64), default="UTC")
 
     # Реляционные связи
     inventory = relationship("Inventory", back_populates="user", cascade="all, delete-orphan")
