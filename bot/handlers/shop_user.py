@@ -13,19 +13,22 @@ router = Router(name="shop_user_router")
 
 ITEMS_PER_PAGE = 1
 
-async def send_shop_page(message_or_query, session: AsyncSession, page: int = 1):
-    """Универсальная функция для отрисовки страницы магазина."""
+async def send_shop_page(callback_or_message, session: AsyncSession, page: int = 1):
+    """Отрисовка карточки товара в магазине с защитой от пустого каталога."""
+    # Считаем только неудаленные товары
     count_query = select(func.count(ShopItem.id)).where(ShopItem.is_deleted == False)
     total_items = (await session.execute(count_query)).scalar()
 
     if total_items == 0:
-        text = "🛒 **Магазин товаров**\n\nВ данный момент витрина пуста. Менеджеры еще не добавили товары. Загляните позже!"
-        if isinstance(message_or_query, Message):
-            await message_or_query.answer(text, parse_mode="Markdown")
+        text = "🛒 **Магазин товаров**\n\nВ данный момент витрина пуста. Менеджеры добавят мерч в ближайшее время! ✨"
+        from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+        if isinstance(callback_or_message, CallbackQuery):
+            await callback_or_message.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="Markdown")
         else:
-            await message_or_query.message.edit_text(text, parse_mode="Markdown")
+            await callback_or_message.answer(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="Markdown")
         return
 
+    # Извлекаем товар для текущей страницы
     offset_value = (page - 1) * ITEMS_PER_PAGE
     item_query = (
         select(ShopItem)
@@ -48,27 +51,25 @@ async def send_shop_page(message_or_query, session: AsyncSession, page: int = 1)
 
     reply_markup = get_shop_item_keyboard(item.id, page, has_next, item.price)
 
-    if isinstance(message_or_query, Message):
-        await message_or_query.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
+    if isinstance(callback_or_message, CallbackQuery):
         try:
-            await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            await callback_or_message.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         except Exception:
-            await message_or_query.answer()
-
-@router.message(F.text == "🛍️ Магазин товаров")
-async def cmd_shop(message: Message, db_session: AsyncSession):
-    await send_shop_page(message, db_session, page=1)
+            await callback_or_message.answer()
+    else:
+        await callback_or_message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("shop_page:"))
 async def process_shop_page(callback: CallbackQuery, db_session: AsyncSession):
+    # ИСПРАВЛЕНО: берем точечный элемент по индексу 1 из split
     page = int(callback.data.split(":")[1])
     await send_shop_page(callback, db_session, page=page)
+    await callback.answer()
 
 @router.callback_query(F.data.startswith("shop_buy:"))
 async def process_buy_click(callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext):
-    _, item_id, page = callback.data.split(":")
-    item_id, page = int(item_id), int(page)
+    parts = callback.data.split(":")
+    item_id, page = int(parts[1]), int(parts[2])
 
     item = await db_session.get(ShopItem, item_id)
     if not item or item.is_deleted:
@@ -76,6 +77,7 @@ async def process_buy_click(callback: CallbackQuery, db_user: User, db_session: 
         await send_shop_page(callback, db_session, page=1)
         return
 
+    # Сверяем с текущим кошельком current_rating (титул не пострадает)
     if db_user.current_rating < item.price:
         await callback.answer(
             f"❌ Недостаточно средств! Вам не хватает {item.price - db_user.current_rating} {settings.CURRENCY_NAME}", 
@@ -105,7 +107,7 @@ async def process_delivery_input(message: Message, state: FSMContext, db_session
         await state.clear()
         return
 
-    await state.update_data(delivery_text=message.text)
+    await state.update_data(delivery_text=message.text.strip())
 
     text = (
         f"📝 **Проверьте корректность данных заказа:**\n\n"
@@ -121,7 +123,7 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
     data = await state.get_data()
     delivery_text = data.get("delivery_text")
     
-    item_id = int(callback.data.split(":"))
+    item_id = int(callback.data.split(":")[1])
     item = await db_session.get(ShopItem, item_id)
     
     if not item or item.is_deleted:
@@ -129,11 +131,13 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
         await state.clear()
         return
 
+    # Race Condition Protection (Двойной контроль баланса в момент клика)
     if db_user.current_rating < item.price:
         await callback.answer("❌ Недостаточно рейтинга!", show_alert=True)
         await state.clear()
         return
 
+    # Проводим транзакцию
     db_user.current_rating -= item.price
 
     new_order = Order(
@@ -145,9 +149,9 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
     )
     db_session.add(new_order)
     await db_session.commit()
-
     await state.clear()
 
+    # Оповещаем менеджеров о новой покупке
     for manager_id in settings.managers_list:
         try:
             await callback.bot.send_message(
@@ -158,14 +162,23 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
                      f"🚚 Контакты: _{delivery_text}_",
                 parse_mode="Markdown"
             )
-        except Exception:
-            pass
+        except Exception: pass
 
-    await callback.message.edit_text("🎉 **Заказ успешно оформлен!**\nМенеджер свяжется с вами для отправки мерча. Проверить статус можно в кнопке '🎁 Мои Награды'.")
+    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+    await callback.message.edit_text(
+        "🎉 **Заказ успешно оформлен!**\nМенеджер свяжется с вами для отправки мерча. "
+        "Проверить статус отправки можно в кнопке '🎁 Мои Награды'.",
+        reply_markup=get_back_to_menu_keyboard(to_manager=False)
+    )
     await callback.answer()
 
 @router.callback_query(F.data == "order_cancel")
 async def process_order_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    await callback.message.edit_text("❌ Оформление заказа отменено.")
+    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+    await callback.message.edit_text(
+        "❌ Оформление заказа отменено.",
+        reply_markup=get_back_to_menu_keyboard(to_manager=False)
+    )
     await callback.answer()
+
