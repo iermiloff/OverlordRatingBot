@@ -72,7 +72,7 @@ async def cmd_manager_antifraud(message: Message, is_manager: bool, db_session: 
     await send_antifraud_page(message, db_session, page=1)
 
 
-@router.types.CallbackQuery(F.data.startswith("af_page:"))
+router.callback_query(F.data.startswith("af_page:"))
 async def process_af_page(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     page = int(callback.data.split(":"))
@@ -80,7 +80,7 @@ async def process_af_page(callback: CallbackQuery, is_manager: bool, db_session:
     await callback.answer()
 
 
-@router.types.CallbackQuery(F.data.startswith("af_act:"))
+@router.callback_query(F.data.startswith("af_act:"))
 async def process_antifraud_action(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     
