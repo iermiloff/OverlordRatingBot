@@ -1,0 +1,2 @@
+# OverlordRatingBot
+Chat Rating Bot
