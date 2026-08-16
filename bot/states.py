@@ -22,5 +22,7 @@ class ManagerSettingsPromo(StatesGroup):
     waiting_for_task_reward = State()    # Ожидание суммы награды за подписку
     
 class ManagerChestSettings(StatesGroup):
-    waiting_for_chest_price = State()  # Ожидание ввода новой цены
-    waiting_for_chest_title = State()  # Ожидание выбора титула
+    waiting_for_chest_price = State()
+    waiting_for_chest_title = State()
+    waiting_for_quiet_hours = State()   # Шаг 1: Время сна
+    waiting_for_random_hours = State()  # Шаг 2: Диапазон рандома
