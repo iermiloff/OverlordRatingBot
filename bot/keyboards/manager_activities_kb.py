@@ -1,6 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 def get_activities_main_keyboard() -> InlineKeyboardMarkup:
+    """Главный пульт управления активностями чата."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📦 Отправить сундук сейчас", callback_data="act_send_chest"),
@@ -11,10 +12,14 @@ def get_activities_main_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🎖️ Требуемый титул", callback_data="act_set_title")
         ],
         [
-            InlineKeyboardButton(text="➕ Добавить награду", callback_data="act_add_reward"),
+            InlineKeyboardButton(text="⏱️ Настроить рандом-таймер", callback_data="act_set_timer"),
+            InlineKeyboardButton(text="➕ Добавить награду", callback_data="act_add_reward")
+        ],
+        [
             InlineKeyboardButton(text="🗑️ Очистить награды", callback_data="act_clear_rewards")
         ]
     ])
+
 
 def get_titles_choice_keyboard(titles: dict) -> InlineKeyboardMarkup:
     """Генерирует список кнопок со всеми титулами из .env для выбора менеджером."""
