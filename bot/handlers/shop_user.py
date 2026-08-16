@@ -64,13 +64,13 @@ async def send_shop_page(message_or_query, session: AsyncSession, page: int = 1)
 async def cmd_shop(message: Message, db_session: AsyncSession):
     await send_shop_page(message, db_session, page=1)
 
-@router.types.CallbackQuery(F.data.startswith("shop_page:"))
+@router.callback_query(F.data.startswith("shop_page:"))
 async def process_shop_page(callback: CallbackQuery, db_session: AsyncSession):
     page = int(callback.data.split(":")[1])
     await send_shop_page(callback, db_session, page=page)
 
-@router.types.CallbackQuery(F.data.startswith("shop_buy:"))
-async def process_buy_click(callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext):
+@router.callback_query(F.data.startswith("shop_buy:"))
+async def process_buy_click(callback: CallbackQuery, db_user: User, db_session: 
     _, item_id, page = callback.data.split(":")
     item_id, page = int(item_id), int(page)
 
@@ -125,7 +125,7 @@ async def process_delivery_input(message: Message, state: FSMContext, db_session
     )
     await message.answer(text, reply_markup=get_order_confirm_keyboard(item.id), parse_mode="Markdown")
 
-@router.types.CallbackQuery(F.data.startswith("order_confirm:"))
+@router.callback_query(F.data.startswith("order_confirm:"))
 async def process_order_confirm(callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext):
     data = await state.get_data()
     delivery_text = data.get("delivery_text")
@@ -178,7 +178,7 @@ async def process_order_confirm(callback: CallbackQuery, db_user: User, db_sessi
     await callback.message.edit_text("🎉 **Заказ успешно оформлен!**\nМенеджер свяжется с вами для отправки мерча. Проверить статус можно в кнопке '🎁 Мои Награды'.")
     await callback.answer()
 
-@router.types.CallbackQuery(F.data == "order_cancel")
+@router.callback_query(F.data == "order_cancel")
 async def process_order_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
     await callback.message.edit_text("❌ Оформление заказа отменено.")
