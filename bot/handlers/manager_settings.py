@@ -13,20 +13,25 @@ router = Router(name="manager_settings_router")
 
 async def refresh_settings_panel(message_or_query, session: AsyncSession):
     """Обновляет состояние панели чатов и промо-каналов."""
-    # Получаем все чаты, в которых состоит бот
+    # Получаем все чаты из базы
     chats_result = await session.execute(select(ChatConfig).order_by(ChatConfig.title))
     chats = chats_result.scalars().all()
+
+    # Извлекаем все созданные промо-каналы для подписок
+    promo_result = await session.execute(select(PromoChannel))
+    promo_channels = promo_result.scalars().all()
 
     text = (
         "⚙️ **Настройка чатов и промо-заданий**\n\n"
         "🟢 **Учет активности в группах:**\n"
-        "Кликните по кнопке чата ниже, чтобы включить или отключить начисление рейтинга за сообщения в нем.\n\n"
-        "📢 **Партнерские каналы:**\n"
-        "Вы можете добавить новый канал, подписку на который пользователи должны будут оформить "
-        "в разделе '📝 Задания' для получения бонуса."
+        "Кликните по кнопке чата ниже, чтобы переключить режим начисления рейтинга за сообщения.\n\n"
+        "📢 **Текущие партнерские задания:**\n"
+        "Вы можете удалять старые ссылки или добавлять новые каналы, подписку на которые "
+        "пользователи должны будут подтвердить в разделе '📝 Задания'."
     )
     
-    reply_markup = get_settings_main_keyboard(chats)
+    # Передаем оба списка в обновленную клавиатуру
+    reply_markup = get_settings_main_keyboard(chats, promo_channels)
 
     if isinstance(message_or_query, Message):
         await message_or_query.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -35,6 +40,7 @@ async def refresh_settings_panel(message_or_query, session: AsyncSession):
             await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         except Exception:
             await message_or_query.answer()
+
 
 
 @router.message(F.text == "⚙️ Настройка Чатов и Промо")
