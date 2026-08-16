@@ -5,7 +5,8 @@ def get_user_keyboard() -> ReplyKeyboardMarkup:
     """Генерирует главное меню для обычного пользователя."""
     keyboard = [
         [KeyboardButton(text="📊 Моя статистика"), KeyboardButton(text="🛍️ Магазин товаров")],
-        [KeyboardButton(text="🤝 Партнерская программа"), KeyboardButton(text="🎖️ Список титулов")],
+        #[KeyboardButton(text="🤝 Партнерская программа")], 
+        [KeyboardButton(text="🎖️ Список титулов")],
         [KeyboardButton(text="📝 Задания"), KeyboardButton(text="💬 Наши Чаты")],
         [KeyboardButton(text="🎁 Мои Награды")]
     ]
