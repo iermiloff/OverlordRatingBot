@@ -43,7 +43,7 @@ async def cmd_manager_settings(message: Message, is_manager: bool, db_session: A
     await refresh_settings_panel(message, db_session)
 
 
-@router.types.CallbackQuery(F.data.startswith("mg_chat_toggle:"))
+@router.callback_query(F.data.startswith("mg_chat_toggle:"))
 async def process_mg_chat_toggle(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     chat_id = int(callback.data.split(":")[1])
@@ -61,7 +61,7 @@ async def process_mg_chat_toggle(callback: CallbackQuery, is_manager: bool, db_s
 
 # --- FSM СЦЕНАРИЙ: ДОБАВЛЕНИЕ ПРОМО-КАНАЛА ---
 
-@router.types.CallbackQuery(F.data == "mg_promo_add")
+@router.callback_query(F.data == "mg_promo_add")
 async def process_mg_promo_add_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     await state.set_state(ManagerSettingsPromo.waiting_for_channel_id)
@@ -145,7 +145,7 @@ async def process_promo_reward(message: Message, state: FSMContext, db_session: 
     await message.answer(f"🎉 Задание для канала [ID: {channel_id}] успешно создано и активировано!")
     await refresh_settings_panel(message, db_session)
 
-@router.types.CallbackQuery(F.data.startswith("mg_promo_del:"))
+@router.callback_query(F.data.startswith("mg_promo_del:"))
 async def process_mg_promo_del(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     promo_id = int(callback.data.split(":"))
