@@ -8,10 +8,8 @@ from database.models import User, PromoChannel, Order, OrderStatus, ActivityLog
 
 router = Router(name="user_tasks_router")
 
-# --- ЛОКАЛЬНЫЕ КЛАВИАТУРЫ МОДУЛЯ ---
-
 def get_tasks_keyboard(channels: list, completed_ids: set) -> InlineKeyboardMarkup:
-    """Генерирует список каналов для подписки."""
+    """Генерирует список каналов для подписки с кнопкой Назад."""
     buttons = []
     for ch in channels:
         if ch.id in completed_ids:
@@ -21,7 +19,13 @@ def get_tasks_keyboard(channels: list, completed_ids: set) -> InlineKeyboardMark
                 InlineKeyboardButton(text="📢 Перейти в канал", url=ch.invite_link),
                 InlineKeyboardButton(text="💎 Проверить", callback_data=f"check_sub:{ch.id}")
             ])
+            
+    # ИСПРАВЛЕНО: Кнопка спасения пользователя из раздела Заданий
+    buttons.append([
+        InlineKeyboardButton(text="↩️ Вернуться в главное меню", callback_data="main_menu_user")
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
 
 def get_rewards_pagination_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
     """Пагинация для истории наград и заказов."""
