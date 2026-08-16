@@ -1,6 +1,6 @@
 import random
 from datetime import datetime
-import pytz  # Библиотека для работы с мировыми часовыми поясами
+import pytz
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -59,7 +59,6 @@ async def send_giveaways_list_page(callback_or_message, session: AsyncSession, m
             local_announce = ga.announce_at.replace(tzinfo=pytz.utc).astimezone(manager_tz)
             local_finalize = ga.finalize_at.replace(tzinfo=pytz.utc).astimezone(manager_tz)
             
-            # ИСПРАВЛЕНО: Явно депарсим составное условие по точным индексам массива
             parts = str(ga.condition_value).split(":")
             title_id = int(parts[0])
             ticket_id = int(parts[1])
@@ -108,7 +107,6 @@ async def process_giveaways_panel_and_pagination(callback: CallbackQuery, is_man
     if not is_manager: return
     page = 1
     if callback.data.startswith("ga_list_page:"):
-        # ИСПРАВЛЕНО: берём точечный строковый элемент по индексу 1
         page = int(callback.data.split(":")[1])
     await send_giveaways_list_page(callback, db_session, db_user, page=page)
     await callback.answer()
@@ -118,7 +116,6 @@ async def process_giveaways_panel_and_pagination(callback: CallbackQuery, is_man
 async def process_ga_delete(callback: CallbackQuery, is_manager: bool, db_user: User, db_session: AsyncSession):
     if not is_manager: return
     parts = callback.data.split(":")
-    # ИСПРАВЛЕНО: расставили точные индексы элементов split для удаления
     ga_id = int(parts[1])
     page = int(parts[2])
 
@@ -129,7 +126,6 @@ async def process_ga_delete(callback: CallbackQuery, is_manager: bool, db_user: 
         await callback.answer(f"✅ Розыгрыш №{ga_id} успешно аннулирован и удален из сетки расписания!", show_alert=True)
     
     await send_giveaways_list_page(callback, db_session, db_user, page=page)
-
 
 # --- FSM СЦЕНАРИЙ: НАСТРОЙКА КРИТЕРИЕВ РОЗЫГРЫША ---
 
@@ -143,6 +139,7 @@ async def process_ga_create_start(callback: CallbackQuery, is_manager: bool, sta
 
 @router.callback_query(ManagerGiveawaySetup.waiting_for_reward_type, F.data.startswith("ga_type:"))
 async def process_ga_reward_type(callback: CallbackQuery, state: FSMContext):
+    # ИСПРАВЛЕНО: Сохраняем строго строку "rating" или "physical" без структуры списка
     chosen_type = callback.data.split(":")[1]
     await state.update_data(ga_reward_type=chosen_type)
     await state.set_state(ManagerGiveawaySetup.waiting_for_reward_value)
@@ -225,7 +222,7 @@ async def process_ga_condition_ticket_chosen(callback: CallbackQuery, state: FSM
     await state.set_state(ManagerGiveawaySetup.waiting_for_announce_time)
     await callback.message.edit_text(
         "📢 **Конструктор розыгрышей [Шаг 6/7]**\n\n"
-        "Укажите дату и время **публикации анонса** требований в чатах.\n\n"
+        "Укажите дату и время **публикации анонса** требований in чатах.\n\n"
         f"⏱️ Вводите время по вашему часовому поясу профиля: **{user_tz_str}**.\n"
         "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `17.08.2026 15:00`):",
         parse_mode="Markdown"
@@ -238,12 +235,9 @@ async def process_ga_announce_time(message: Message, state: FSMContext, db_user:
     text_input = message.text.strip()
     user_tz_str = db_user.timezone or "UTC"
     try:
-        # Локализуем введенную строку времени под часовой пояс менеджера
         manager_tz = pytz.timezone(user_tz_str)
         dt_local = datetime.strptime(text_input, "%d.%m.%Y %H:%M")
         dt_local_localized = manager_tz.localize(dt_local)
-        
-        # Конвертируем в чистое UTC для фонового планировщика сервера
         dt_utc_announce = dt_local_localized.astimezone(pytz.utc).replace(tzinfo=None)
     except ValueError:
         await message.answer("❌ Ошибка! Неверный формат даты. Введите строго по шаблону `ДД.ММ.ГГГГ ЧЧ:ММ`:")
@@ -267,7 +261,6 @@ async def process_ga_finalize_time_and_save(message: Message, state: FSMContext,
         manager_tz = pytz.timezone(user_tz_str)
         dt_local = datetime.strptime(text_input, "%d.%m.%Y %H:%M")
         dt_local_localized = manager_tz.localize(dt_local)
-        
         dt_utc_finalize = dt_local_localized.astimezone(pytz.utc).replace(tzinfo=None)
     except ValueError:
         await message.answer("❌ Ошибка! Неверный формат даты. Введите строго по шаблону `ДД.ММ.ГГГГ ЧЧ:ММ`:")
@@ -285,7 +278,7 @@ async def process_ga_finalize_time_and_save(message: Message, state: FSMContext,
     combo_value = f"{title_id}:{ticket_id}"
 
     new_ga = Giveaway(
-        reward_type=data.get("ga_reward_type")[0],
+        reward_type=data.get("ga_reward_type"),
         reward_value=data.get("ga_reward_value"),
         winners_count=data.get("ga_winners_count"),
         condition_type="combo",
