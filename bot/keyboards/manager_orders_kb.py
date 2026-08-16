@@ -2,9 +2,9 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from database.models import OrderStatus
 
 def get_admin_order_keyboard(order_id: int, page: int, has_next: bool) -> InlineKeyboardMarkup:
-    """Генерирует инлайн-кнопки переключения статусов и пагинации заказа."""
+    """Генерирует инлайн-кнопки управления статусом заказа, навигацию и выход в ЛК."""
     buttons = [
-        # Первый ряд: смена статусов
+        # Ряд изменения статусов заявки
         [
             InlineKeyboardButton(text="⚙️ В работу", callback_data=f"mg_ord_status:{order_id}:{OrderStatus.PROCESSED.value}:{page}"),
             InlineKeyboardButton(text="✅ Выдано", callback_data=f"mg_ord_status:{order_id}:{OrderStatus.COMPLETED.value}:{page}"),
@@ -12,7 +12,7 @@ def get_admin_order_keyboard(order_id: int, page: int, has_next: bool) -> Inline
         ]
     ]
     
-    # Второй ряд: навигация по страницам заявок
+    # Ряд постраничной пагинации очереди
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mg_orders_page:{page-1}"))
@@ -22,4 +22,9 @@ def get_admin_order_keyboard(order_id: int, page: int, has_next: bool) -> Inline
     if nav_row:
         buttons.append(nav_row)
         
+    # Кнопка спасения меню от пропадания
+    buttons.append([
+        InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")
+    ])
+    
     return InlineKeyboardMarkup(inline_keyboard=buttons)
