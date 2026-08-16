@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+  db:
+    image: postgres:15-alpine
+    container_name: rating_bot_db
+    restart: always
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: secret_pass
+      POSTGRES_DB: rating_bot
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+
+  bot:
+    build: .
+    container_name: rating_bot_app
+    restart: always
+    depends_on:
+      - db
+    env_file:
+      - .env
+    command: python main.py
+
+  cron_worker:
+    build: .
+    container_name: rating_bot_worker
+    restart: always
+    depends_on:
+      - db
+    env_file:
+      - .env
+    # Запускает APScheduler внутри скрипта для антифрода и таймеров сундуков
+    command: python -m services.antifraud 
+
+volumes:
+  pgdata:
