@@ -1,5 +1,5 @@
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
@@ -8,10 +8,39 @@ from database.models import User, PromoChannel, Order, OrderStatus, ActivityLog
 
 router = Router(name="user_tasks_router")
 
+# --- ЛОКАЛЬНЫЕ КЛАВИАТУРЫ МОДУЛЯ ---
+
+def get_tasks_keyboard(channels: list, completed_ids: set) -> InlineKeyboardMarkup:
+    """Генерирует список каналов для подписки."""
+    buttons = []
+    for ch in channels:
+        if ch.id in completed_ids:
+            buttons.append([InlineKeyboardButton(text="✅ Подписка оформлена (Получено)", callback_data="noop")])
+        else:
+            buttons.append([
+                InlineKeyboardButton(text="📢 Перейти в канал", url=ch.invite_link),
+                InlineKeyboardButton(text="💎 Проверить", callback_data=f"check_sub:{ch.id}")
+            ])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+def get_rewards_pagination_keyboard(page: int, has_next: bool) -> InlineKeyboardMarkup:
+    """Пагинация для истории наград и заказов."""
+    buttons = []
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"rewards_page:{page-1}"))
+    if has_next:
+        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"rewards_page:{page+1}"))
+    
+    if nav_row:
+        buttons.append(nav_row)
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+# --- ХЭНДЛЕРЫ: РАЗДЕЛ ЗАДАНИЙ ---
+
 @router.message(F.text == "📝 Задания")
 async def show_user_tasks(message: Message, db_user: User, db_session: AsyncSession):
     """Выводит список промоканалов с проверкой на подписку."""
-    # Получаем все доступные каналы из базы данных
     channels_result = await db_session.execute(select(PromoChannel))
     channels = channels_result.scalars().all()
 
@@ -19,9 +48,6 @@ async def show_user_tasks(message: Message, db_user: User, db_session: AsyncSess
         await message.answer("📝 **Доступные задания**\n\nВ данный момент заданий на подписку нет. Проверьте позже!")
         return
 
-    # Чтобы понять, какие задания юзер уже выполнил, смотрим логи активности
-    # Будем искать записи в activity_logs, где chat_id равен ID промоканала
-    # (При активации подписки мы пишем туда специальный маркер с длиной сообщения 0)
     completed_result = await db_session.execute(
         select(ActivityLog.chat_id).where(
             and_(ActivityLog.user_id == db_user.tg_id, ActivityLog.message_length == 0)
@@ -34,15 +60,12 @@ async def show_user_tasks(message: Message, db_user: User, db_session: AsyncSess
         f"Подписывайся на каналы наших партнеров и получай мгновенный бонус к рейтингу! "
         f"Бот начисляет {settings.CURRENCY_EMOJI} {settings.CURRENCY_NAME} сразу после проверки."
     )
-    
     await message.answer(text, reply_markup=get_tasks_keyboard(channels, completed_ids), parse_mode="Markdown")
-
 
 @router.callback_query(F.data.startswith("check_sub:"))
 async def process_check_subscription(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
     channel_id = int(callback.data.split(":")[1])
 
-    # Проверяем, не выполнял ли уже
     dup_check = await db_session.execute(
         select(ActivityLog).where(
             and_(ActivityLog.user_id == db_user.tg_id, ActivityLog.chat_id == channel_id, ActivityLog.message_length == 0)
@@ -58,38 +81,25 @@ async def process_check_subscription(callback: CallbackQuery, db_user: User, db_
         return
 
     try:
-        # Запрашиваем у Telegram статус пользователя в целевом канале
         member = await callback.bot.get_chat_member(chat_id=channel_id, user_id=db_user.tg_id)
-        
-        # Если статус соответствует участнику/админу/создателю
         if member.status in ["member", "administrator", "creator"]:
-            # Начисляем награду
             db_user.current_rating += channel.reward
             db_user.lifetime_rating += channel.reward
 
-            # Фиксируем выполнение в логах (message_length=0 как маркер задания)
-            task_log = ActivityLog(
-                user_id=db_user.tg_id,
-                chat_id=channel_id,
-                message_length=0
-            )
+            task_log = ActivityLog(user_id=db_user.tg_id, chat_id=channel_id, message_length=0)
             db_session.add(task_log)
             await db_session.commit()
 
             await callback.answer(f"✅ Успешно! Вам начислено +{channel.reward} {settings.CURRENCY_NAME}", show_alert=True)
-            
-            # Обновляем меню заданий на лету
             await show_user_tasks(callback.message, db_user, db_session)
-            try:
-                await callback.message.delete()
-            except Exception:
-                pass
+            try: await callback.message.delete()
+            except Exception: pass
         else:
             await callback.answer("❌ Подписка не найдена. Сначала вступите в канал!", show_alert=True)
     except Exception:
-        # Если бот не добавлен в канал как администратор, он не сможет проверить подписку
-        await callback.answer("⚠️ Ошибка проверки. Сообщите менеджеру, если вы подписались.", show_alert=True)
+        await callback.answer("⚠️ Ошибка проверки. Убедитесь, что бот добавлен администратором в целевой канал.", show_alert=True)
 
+# --- ХЭНДЛЕРЫ: ИСТОРИЯ НАГРАД ---
 
 REWARDS_PER_PAGE = 3
 
@@ -99,7 +109,7 @@ async def send_rewards_page(message_or_query, session: AsyncSession, user_id: in
     total_orders = (await session.execute(count_query)).scalar()
 
     if total_orders == 0:
-        text = "🎁 **Мои Награды**\n\nВы еще не совершали покупок в магазине и не выигрывали в активностях чата. Время это исправить!"
+        text = "🎁 **Мои Награды**\n\nВы еще не совершали покупок в магазине и не выигрывали в активностях чата. Время это исправить! 🚀"
         if isinstance(message_or_query, Message):
             await message_or_query.answer(text, parse_mode="Markdown")
         else:
@@ -142,11 +152,8 @@ async def send_rewards_page(message_or_query, session: AsyncSession, user_id: in
     if isinstance(message_or_query, Message):
         await message_or_query.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
     else:
-        try:
-            await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception:
-            await message_or_query.answer()
-
+        try: await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+        except Exception: await message_or_query.answer()
 
 @router.message(F.text == "🎁 Мои Награды")
 async def cmd_my_rewards(message: Message, db_user: User, db_session: AsyncSession):
