@@ -150,14 +150,17 @@ async def process_promo_reward(message: Message, state: FSMContext, db_session: 
 
     await message.answer(f"🎉 Задание для канала [ID: {channel_id}] успешно создано и активировано!")
     await refresh_settings_panel(message, db_session)
-
+    
 @router.callback_query(F.data.startswith("mg_promo_del:"))
 async def process_mg_promo_del(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
-    promo_id = int(callback.data.split(":"))
+
+    promo_id = int(callback.data.split(":")[1])
+    
     promo = await db_session.get(PromoChannel, promo_id)
     if promo:
         await db_session.delete(promo)
         await db_session.commit()
         await callback.answer("✅ Промо-задание успешно удалено!", show_alert=True)
+        
     await refresh_settings_panel(callback, db_session)
