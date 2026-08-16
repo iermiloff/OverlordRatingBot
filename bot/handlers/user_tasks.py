@@ -38,7 +38,7 @@ async def show_user_tasks(message: Message, db_user: User, db_session: AsyncSess
     await message.answer(text, reply_markup=get_tasks_keyboard(channels, completed_ids), parse_mode="Markdown")
 
 
-@router.types.CallbackQuery(F.data.startswith("check_sub:"))
+@router.callback_query(F.data.startswith("check_sub:"))
 async def process_check_subscription(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
     channel_id = int(callback.data.split(":")[1])
 
@@ -152,11 +152,11 @@ async def send_rewards_page(message_or_query, session: AsyncSession, user_id: in
 async def cmd_my_rewards(message: Message, db_user: User, db_session: AsyncSession):
     await send_rewards_page(message, db_session, db_user.tg_id, page=1)
 
-@router.types.CallbackQuery(F.data.startswith("rewards_page:"))
+@router.callback_query(F.data.startswith("rewards_page:"))
 async def process_rewards_page(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
     page = int(callback.data.split(":")[1])
     await send_rewards_page(callback, db_session, db_user.tg_id, page=page)
 
-@router.types.CallbackQuery(F.data == "noop")
+@router.callback_query(F.data == "noop")
 async def process_noop(callback: CallbackQuery):
     await callback.answer()
