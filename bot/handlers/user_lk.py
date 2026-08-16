@@ -123,32 +123,34 @@ from database.models import ChatConfig
 @router.message(F.text == "💬 Наши Чаты")
 async def show_active_chats_list(message: Message, db_session: AsyncSession):
     """Выводит список групп, в которых включен учет активности и начисление рейтинга."""
-    # Запрашиваем из БД только те чаты, которые менеджер включил (is_active == True)
     query = select(ChatConfig).where(ChatConfig.is_active == True).order_by(ChatConfig.title)
     result = await db_session.execute(query)
     active_chats = result.scalars().all()
 
-    # Если менеджер отключил все чаты или бот еще нигде не залогировал активность
     if not active_chats:
         text = (
-            "💬 **Наши Чаты**\n\n"
+            "💬 <b>Наши Чаты</b>\n\n"
             "В данный момент нет подключенных групп для начисления рейтинга. "
             "Менеджеры настроят их в ближайшее время! ⏳"
         )
-        await message.answer(text, parse_mode="Markdown")
+        await message.answer(text, parse_mode="HTML")
         return
 
     lines = [
-        "💬 **Список наших официальных чатов:**\n",
+        "💬 <b>Список наших официальных чатов:</b>\n",
         f"Проявляй активность в любой из этих групп, общайся и получай автоматическую "
         f"валюту {settings.CURRENCY_EMOJI} {settings.CURRENCY_NAME} за каждое сообщение! ✨\n"
     ]
 
     for idx, chat in enumerate(active_chats, start=1):
-        # Отображаем имя чата. 
-        # Примечание: Для вывода кликабельной ссылки бот должен знать invite_link группы.
-        # Пока выводим просто название, зафиксированное логгером.
-        lines.append(f"{idx}. 👥 **{chat.title}** — _Учет активности активен_")
+        # Если ссылка есть в базе — делаем название кликабельным
+        if chat.invite_link:
+            chat_name_html = f'<a href="{chat.invite_link}">{chat.title}</a>'
+        else:
+            # Если ссылки нет (бот не админ) — выводим обычный текст
+            chat_name_html = f"<b>{chat.title}</b>"
+            
+        lines.append(f"{idx}. 👥 {chat_name_html} — <i>Учет активности активен</i>")
 
-    await message.answer("\n".join(lines), parse_mode="Markdown")
+    await message.answer("\n".join(lines), parse_mode="HTML")
 
