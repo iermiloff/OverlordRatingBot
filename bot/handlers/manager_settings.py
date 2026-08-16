@@ -4,6 +4,7 @@ from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 
+# Прямые импорты конфигурации, моделей и клавиатур
 from config import settings
 from database.models import ChatConfig, PromoChannel
 from bot.keyboards.manager_settings_kb import get_settings_main_keyboard
@@ -11,8 +12,8 @@ from bot.states import ManagerSettingsPromo
 
 router = Router(name="manager_settings_router")
 
-async def refresh_settings_panel(message_or_query, session: AsyncSession):
-    """Обновляет состояние панели чатов и промо-каналов."""
+async def refresh_settings_panel(callback_or_message, session: AsyncSession):
+    """Обновляет состояние экранной панели чатов и промо-каналов."""
     # Получаем все чаты из базы
     chats_result = await session.execute(select(ChatConfig).order_by(ChatConfig.title))
     chats = chats_result.scalars().all()
@@ -33,25 +34,27 @@ async def refresh_settings_panel(message_or_query, session: AsyncSession):
     # Передаем оба списка в обновленную клавиатуру
     reply_markup = get_settings_main_keyboard(chats, promo_channels)
 
-    if isinstance(message_or_query, Message):
-        await message_or_query.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
+    if isinstance(callback_or_message, CallbackQuery):
         try:
-            await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
+            await callback_or_message.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
         except Exception:
-            await message_or_query.answer()
+            await callback_or_message.answer()
+    else:
+        await callback_or_message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 
-
-@router.message(F.text == "⚙️ Настройка Чатов и Промо")
-async def cmd_manager_settings(message: Message, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    await refresh_settings_panel(message, db_session)
+@router.callback_query(F.data == "mg_settings_panel")
+async def process_mg_settings_panel_click(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    if not is_manager:
+        return
+    await refresh_settings_panel(callback, db_session)
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("mg_chat_toggle:"))
 async def process_mg_chat_toggle(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
+    if not is_manager:
+        return
     chat_id = int(callback.data.split(":")[1])
 
     chat = await db_session.get(ChatConfig, chat_id)
@@ -64,18 +67,33 @@ async def process_mg_chat_toggle(callback: CallbackQuery, is_manager: bool, db_s
     
     await refresh_settings_panel(callback, db_session)
 
+@router.callback_query(F.data.startswith("mg_promo_del:"))
+async def process_mg_promo_del(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    if not is_manager: 
+        return
+        
+    # ИСПРАВЛЕНО: берём элемент с индексом 1, чтобы получить саму строку ID без ошибки TypeError
+    promo_id = int(callback.data.split(":")[1])
+    
+    promo = await db_session.get(PromoChannel, promo_id)
+    if promo:
+        await db_session.delete(promo)
+        await db_session.commit()
+        await callback.answer("✅ Промо-задание успешно удалено!", show_alert=True)
+        
+    await refresh_settings_panel(callback, db_session)
 
 # --- FSM СЦЕНАРИЙ: ДОБАВЛЕНИЕ ПРОМО-КАНАЛА ---
 
 @router.callback_query(F.data == "mg_promo_add")
 async def process_mg_promo_add_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
-    if not is_manager: return
+    if not is_manager: 
+        return
     await state.set_state(ManagerSettingsPromo.waiting_for_channel_id)
     
     await callback.message.answer(
         "📢 **Добавление задания [Шаг 1/3]**\n\n"
-        "Введите **Telegram ID** канала. Бот должен быть добавлен в этот канал в качестве администратора "
-        "(с правами проверки участников).\n\n"
+        "Введите **Telegram ID** канала. Бот должен быть добавлен в этот канал администратором.\n\n"
         "👉 ID должен начинаться с -100 (например: `-100123456789`):",
         parse_mode="Markdown"
     )
@@ -86,7 +104,6 @@ async def process_mg_promo_add_start(callback: CallbackQuery, is_manager: bool, 
 async def process_promo_channel_id(message: Message, state: FSMContext):
     text_input = message.text.strip()
     
-    # Валидация формата ID
     if not text_input.startswith("-100") or not text_input.replace("-", "").isdigit():
         await message.answer("❌ Ошибка! ID канала должен быть числом и начинаться с -100. Попробуйте еще раз:")
         return
@@ -130,7 +147,6 @@ async def process_promo_reward(message: Message, state: FSMContext, db_session: 
     data = await state.get_data()
     channel_id = data.get("promo_id")
 
-    # Проверяем, нет ли уже такого канала в базе
     existing = await db_session.get(PromoChannel, channel_id)
     if existing:
         await message.answer("❌ Этот канал уже добавлен в список заданий!")
@@ -138,7 +154,6 @@ async def process_promo_reward(message: Message, state: FSMContext, db_session: 
         await refresh_settings_panel(message, db_session)
         return
 
-    # Сохраняем в PostgreSQL
     new_promo = PromoChannel(
         id=channel_id,
         invite_link=data.get("promo_link"),
@@ -148,19 +163,10 @@ async def process_promo_reward(message: Message, state: FSMContext, db_session: 
     await db_session.commit()
     await state.clear()
 
-    await message.answer(f"🎉 Задание для канала [ID: {channel_id}] успешно создано и активировано!")
-    await refresh_settings_panel(message, db_session)
-    
-@router.callback_query(F.data.startswith("mg_promo_del:"))
-async def process_mg_promo_del(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
+    # ИСПРАВЛЕНО: возвращаем кнопку спасения меню, чтобы предотвратить тупик после ввода FSM данных
+    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+    await message.answer(
+        f"🎉 Задание для канала [ID: {channel_id}] успешно создано и активировано!",
+        reply_markup=get_back_to_menu_keyboard(to_manager=True)
+    )
 
-    promo_id = int(callback.data.split(":")[1])
-    
-    promo = await db_session.get(PromoChannel, promo_id)
-    if promo:
-        await db_session.delete(promo)
-        await db_session.commit()
-        await callback.answer("✅ Промо-задание успешно удалено!", show_alert=True)
-        
-    await refresh_settings_panel(callback, db_session)
