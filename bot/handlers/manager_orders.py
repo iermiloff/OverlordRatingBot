@@ -88,7 +88,7 @@ async def cmd_manager_orders(message: Message, is_manager: bool, db_session: Asy
     await send_admin_orders_page(message, db_session, page=1)
 
 
-@router.types.CallbackQuery(F.data.startswith("mg_orders_page:"))
+@router.callback_query(F.data.startswith("mg_orders_page:"))
 async def process_mg_orders_page(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     page = int(callback.data.split(":"))
@@ -96,7 +96,7 @@ async def process_mg_orders_page(callback: CallbackQuery, is_manager: bool, db_s
     await callback.answer()
 
 
-@router.types.CallbackQuery(F.data.startswith("mg_ord_status:"))
+@router.callback_query(F.data.startswith("mg_ord_status:"))
 async def process_mg_order_status_change(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     
