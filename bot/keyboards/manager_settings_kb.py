@@ -2,12 +2,12 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 def get_settings_main_keyboard(chats: list, promo_channels: list) -> InlineKeyboardMarkup:
     """
-    Генерирует пульт управления чатами и промо-каналами.
+    Генерирует экранный пульт управления чатами и промо-каналами.
     Принимает списки объектов из базы данных.
     """
     buttons = []
     
-    # 1. Секция модерирования чатов активности
+    # 1. Секция модерирования чатов активности (включен / выключен)
     for chat in chats:
         status_emoji = "✅" if chat.is_active else "❌"
         buttons.append([
@@ -27,6 +27,11 @@ def get_settings_main_keyboard(chats: list, promo_channels: list) -> InlineKeybo
     # 3. Кнопка создания нового задания на подписку
     buttons.append([
         InlineKeyboardButton(text="➕ Добавить промо-канал", callback_data="mg_promo_add")
+    ])
+    
+    # 4. Кнопка возврата в главное меню админки
+    buttons.append([
+        InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
