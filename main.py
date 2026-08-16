@@ -13,18 +13,8 @@ from bot.middlewares.db_session import DbSessionMiddleware
 from bot.middlewares.auth import AuthMiddleware
 from bot.middlewares.activity_log import ActivityLogMiddleware
 
-# Импорты Роутеров
-from bot.handlers.common import router as common_router
-from bot.handlers.user_lk import router as user_lk_router
-from bot.handlers.shop_user import router as shop_user_router
-from bot.handlers.user_tasks import router as user_tasks_router
-from bot.handlers.manager_users import router as manager_users_router
-from bot.handlers.manager_shop import router as manager_shop_router
-from bot.handlers.manager_orders import router as manager_orders_router
-from bot.handlers.manager_antifraud import router as manager_antifraud_router
-from bot.handlers.manager_activities import router as manager_activities_router
-from bot.handlers.manager_settings import router as manager_settings_router
-from bot.handlers.chat_activity import router as chat_activity_router
+# Импортируем централизованный сборщик роутеров
+from bot.handlers import get_main_router
 
 # Настраиваем логирование
 logging.basicConfig(
@@ -34,50 +24,48 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def init_db():
-    """Автоматически создает все таблицы в базе данных при старте."""
+    """Автоматически создает все таблицы в базе данных при старте с механизмом ожидания."""
     logger.info("Инициализация базы данных...")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    logger.info("База данных успешно инициализирована!")
+    max_retries = 5
+    for attempt in range(1, max_retries + 1):
+        try:
+            async with engine.begin() as conn:
+                await conn.run_sync(Base.metadata.create_all)
+            logger.info("База данных успешно инициализирована!")
+            return
+        except Exception as e:
+            if attempt == max_retries:
+                logger.error("❌ Не удалось подключиться к базе данных.")
+                raise e
+            logger.warning(f"⚠️ База данных еще не готова (Попытка {attempt}/{max_retries}). Ожидание 2 секунды...")
+            await asyncio.sleep(2)
 
 async def main():
     bot = Bot(token=settings.BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
-    # 1. Сначала инициализируем базу данных
+    # 1. Инициализация структуры БД
     await init_db()
 
-    # 2. Подключаем глобальные Middlewares (на весь диспетчер)
-    dp.update.middleware(DbSessionMiddleware())
-    dp.update.middleware(AuthMiddleware())
+    # 2. Подключение OUTER Middlewares (выполняются до FSM и фильтров роутеров)
+    dp.update.outer_middleware(DbSessionMiddleware())
+    dp.update.outer_middleware(AuthMiddleware())
 
-    # 3. Подключаем Middleware логирования активности ТОЛЬКО на текстовые сообщения
+    # 3. Подключение INNER Middleware (выполняется только для текстовых сообщений)
     dp.message.middleware(ActivityLogMiddleware())
 
-    # 4. Регистрируем все роутеры в строгом иерархическом порядке
-    dp.include_router(common_router)
-    dp.include_router(user_lk_router)
-    dp.include_router(shop_user_router)
-    dp.include_router(user_tasks_router)
-    dp.include_router(manager_users_router)
-    dp.include_router(manager_shop_router)
-    dp.include_router(manager_orders_router)
-    dp.include_router(manager_antifraud_router)
-    dp.include_router(manager_activities_router)
-    dp.include_router(manager_settings_router)
-    
-    # Роутер активности чатов всегда идет в самом конце цепочки
-    dp.include_router(chat_activity_router)
+    # 4. Подключаем единый собранный роутер со всеми хэндлерами
+    dp.include_router(get_main_router())
 
     logger.info(f"Запуск бота {settings.BOT_NAME} в режиме Polling...")
     
     try:
-        # Стираем сообщения, пришедшие в офлайне, чтобы не спамить ими при включении
+        # Очищаем очередь сообщений, пришедших в офлайне
         await bot.delete_webhook(drop_pending_updates=True)
         # Запускаем бесконечный асинхронный цикл прослушивания Telegram
         await dp.start_polling(bot)
     finally:
-        # Корректно закрываем сессию бота при остановке
+        # Корректно закрываем сессию бота при остановке контейнера
         await bot.session.close()
 
 if __name__ == "__main__":
