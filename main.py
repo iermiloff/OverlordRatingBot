@@ -2,6 +2,7 @@ import asyncio
 import logging
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from sqlalchemy import text
 
 # Прямые импорты из корня проекта
 from config import settings
@@ -23,14 +24,23 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def init_db():
-    """Автоматически создает все таблицы в базе данных при старте с механизмом ожидания."""
+    """Автоматически создает таблицы и обновляет структуру старых таблиц при старте."""
     logger.info("Инициализация базы данных...")
     max_retries = 5
     for attempt in range(1, max_retries + 1):
         try:
+            # 1. Создаем новые таблицы, если их нет
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-            logger.info("База данных успешно инициализирована!")
+            
+            # 2. Накатываем обновление для старой таблицы chats_config (добавляем invite_link)
+            async with engine.connect() as conn:
+                await conn.execute(
+                    text("ALTER TABLE chats_config ADD COLUMN IF NOT EXISTS invite_link VARCHAR(256);")
+                )
+                await conn.commit()
+                
+            logger.info("База данных успешно инициализирована и обновлена!")
             return
         except Exception as e:
             if attempt == max_retries:
@@ -38,6 +48,7 @@ async def init_db():
                 raise e
             logger.warning(f"⚠️ База данных еще не готова (Попытка {attempt}/{max_retries}). Ожидание 2 секунды...")
             await asyncio.sleep(2)
+
 
 async def main():
     bot = Bot(token=settings.BOT_TOKEN)
