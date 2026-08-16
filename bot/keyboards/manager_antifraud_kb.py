@@ -1,7 +1,7 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 def get_antifraud_actions_keyboard(user_id: int, page: int, has_next: bool) -> InlineKeyboardMarkup:
-    """Генерирует сетку кнопок для принятия мер к подозрительному пользователю."""
+    """Генерирует кнопки мер к нарушителю и кнопку выхода."""
     buttons = [
         [
             InlineKeyboardButton(text="💎 Снять рейтинг", callback_data=f"af_act:{user_id}:strip:{page}"),
@@ -13,7 +13,6 @@ def get_antifraud_actions_keyboard(user_id: int, page: int, has_next: bool) -> I
         ]
     ]
     
-    # Ряд навигации по списку нарушителей
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"af_page:{page-1}"))
@@ -23,4 +22,6 @@ def get_antifraud_actions_keyboard(user_id: int, page: int, has_next: bool) -> I
     if nav_row:
         buttons.append(nav_row)
         
+    # ИСПРАВЛЕНО: Выход из панели антифрода в ЛК
+    buttons.append([InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
