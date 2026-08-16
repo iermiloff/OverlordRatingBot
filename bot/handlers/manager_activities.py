@@ -99,13 +99,12 @@ async def process_quiet_hours_input(message: Message, state: FSMContext):
         "🎲 **Настройка таймера [Шаг 2/2]**\n\n"
         "Введите **диапазон рандома в часах** (в течение какого времени после сна сундук имеет шанс выпасть. Например, `12`):"
     )
-
+    
 @router.message(ManagerChestSettings.waiting_for_random_hours)
 async def process_random_hours_input(message: Message, state: FSMContext, db_session: AsyncSession):
     if not message.text.strip().isdigit():
         await message.answer("❌ Введите корректное целое число часов:")
         return
-    
     data = await state.get_data()
     quiet_h = data.get("quiet_h")
     random_h = int(message.text.strip())
@@ -116,8 +115,11 @@ async def process_random_hours_input(message: Message, state: FSMContext, db_ses
     await db_session.commit()
     await state.clear()
 
-    await message.answer(f"✅ Рандомный алгоритм успешно перенастроен! Сундук появится в промежутке от {quiet_h} до {quiet_h + random_h} часов.")
-    await cmd_manager_activities(message, is_manager=True, db_session=db_session)
+    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+    await message.answer(
+        f"✅ Таймер перенастроен! Сундук появится в промежутке от {quiet_h} до {quiet_h + random_h} часов.",
+        reply_markup=get_back_to_menu_keyboard(to_manager=True) # ИСПРАВЛЕНО: Кнопка спасения меню
+    )
 
 # --- ИЗМЕНЕНИЕ СТОИМОСТИ КЛЮЧА И ТИТУЛА ---
 
@@ -137,8 +139,11 @@ async def process_save_price(message: Message, state: FSMContext, db_session: As
     sys_settings.chest_open_price = int(message.text.strip())
     await db_session.commit()
     await state.clear()
-    await message.answer("✅ Стоимость ключа успешно сохранена!")
-    await cmd_manager_activities(message, is_manager=True, db_session=db_session)
+    
+    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+    await message.answer(
+        f"✅ Стоимость открытия сундука успешно изменена на **{message.text.strip()}** {settings.CURRENCY_NAME}!",
+        reply_markup=get_back_to_menu_keyboard(to_manager=True) # ИСПРАВЛЕНО: Кнопка спасения меню
 
 @router.callback_query(F.data == "act_set_title")
 async def process_set_title_start(callback: CallbackQuery, is_manager: bool):
