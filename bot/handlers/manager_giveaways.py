@@ -52,18 +52,20 @@ async def send_giveaways_list_page(callback_or_message, session: AsyncSession, m
 
         lines = [f"🎉 **Сетка запланированных розыгрышей (Страница {page})**\n"]
         
-        # Получаем личный часовой пояс текущего менеджера из БД (по умолчанию UTC)
         user_tz_str = manager_user.timezone or "UTC"
         manager_tz = pytz.timezone(user_tz_str)
 
         for ga in giveaways:
-            # Конвертируем серверное UTC обратно в личный часовой пояс админа для наглядности
             local_announce = ga.announce_at.replace(tzinfo=pytz.utc).astimezone(manager_tz)
             local_finalize = ga.finalize_at.replace(tzinfo=pytz.utc).astimezone(manager_tz)
             
+            # ИСПРАВЛЕНО: Явно депарсим составное условие по точным индексам массива
             parts = str(ga.condition_value).split(":")
-            t_name = settings.parsed_titles.get(int(parts)).name
-            cond_label = f"Титул '{t_name}'" + (f" + Билет №{parts}" if int(parts) > 0 else " (Без билета)")
+            title_id = int(parts[0])
+            ticket_id = int(parts[1])
+            
+            t_name = settings.parsed_titles.get(title_id).name
+            cond_label = f"Титул '{t_name}'" + (f" + Билет №{ticket_id}" if ticket_id > 0 else " (Без билета)")
             
             status_label = "⏳ Ожидает" if ga.status == "created" else "📢 Анонсирован"
 
@@ -106,7 +108,8 @@ async def process_giveaways_panel_and_pagination(callback: CallbackQuery, is_man
     if not is_manager: return
     page = 1
     if callback.data.startswith("ga_list_page:"):
-        page = int(callback.data.split(":"))
+        # ИСПРАВЛЕНО: берём точечный строковый элемент по индексу 1
+        page = int(callback.data.split(":")[1])
     await send_giveaways_list_page(callback, db_session, db_user, page=page)
     await callback.answer()
 
@@ -115,8 +118,9 @@ async def process_giveaways_panel_and_pagination(callback: CallbackQuery, is_man
 async def process_ga_delete(callback: CallbackQuery, is_manager: bool, db_user: User, db_session: AsyncSession):
     if not is_manager: return
     parts = callback.data.split(":")
-    ga_id = int(parts)
-    page = int(parts)
+    # ИСПРАВЛЕНО: расставили точные индексы элементов split для удаления
+    ga_id = int(parts[1])
+    page = int(parts[2])
 
     ga = await db_session.get(Giveaway, ga_id)
     if ga:
@@ -125,6 +129,7 @@ async def process_ga_delete(callback: CallbackQuery, is_manager: bool, db_user: 
         await callback.answer(f"✅ Розыгрыш №{ga_id} успешно аннулирован и удален из сетки расписания!", show_alert=True)
     
     await send_giveaways_list_page(callback, db_session, db_user, page=page)
+
 
 # --- FSM СЦЕНАРИЙ: НАСТРОЙКА КРИТЕРИЕВ РОЗЫГРЫША ---
 
