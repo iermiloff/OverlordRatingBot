@@ -73,7 +73,6 @@ async def cmd_manager_activities(message_or_query, is_manager: bool, db_session:
         base_kb.inline_keyboard.append([back_btn])
 
     if isinstance(message_or_query, Message):
-        # ИСПРАВЛЕНО: убран некорректный await перед присвоением
         await message_or_query.answer(text, reply_markup=base_kb, parse_mode="Markdown")
     else:
         try:
@@ -170,7 +169,8 @@ async def process_set_title_start(callback: CallbackQuery, is_manager: bool):
 @router.callback_query(F.data.startswith("act_save_title:"))
 async def process_save_title(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
-    title_id = int(callback.data.split(":"))
+    # ИСПРАВЛЕНО: берём элемент по индексу 1, чтобы избежать TypeError со списком
+    title_id = int(callback.data.split(":")[1])
 
     sys_settings = await get_sys_settings(db_session)
     sys_settings.chest_min_title_id = title_id
@@ -209,41 +209,6 @@ async def process_send_chest_now(callback: CallbackQuery, is_manager: bool, db_s
 
     await callback.answer(f"🚀 Сундук заброшен в чаты!", show_alert=True)
 
-@router.callback_query(F.data == "act_run_giveaway")
-async def process_run_giveaway(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    
-    query = select(User).where(User.lifetime_rating > 10).order_by(func.random()).limit(1)
-    result = await db_session.execute(query)
-    winner = result.scalar_one_or_none()
-    
-    if not winner:
-        await callback.answer("❌ Нет активных пользователей с рейтингом > 10.", show_alert=True)
-        return
-
-    giveaway_bonus = 100
-    winner.current_rating += giveaway_bonus
-    winner.lifetime_rating += giveaway_bonus
-    await db_session.commit()
-
-    chats_result = await db_session.execute(select(ChatConfig).where(ChatConfig.is_active == True))
-    active_chats = chats_result.scalars().all()
-    winner_mention = f"@{winner.username}" if winner.username else winner.full_name
-
-    for chat in active_chats:
-        try:
-            await callback.bot.send_message(
-                chat_id=chat.id,
-                text=f"🎉 **ЕЖЕДНЕВНЫЙ РОЗЫГРЫШ ЗАВЕРШЕН!** 🎉\n\n"
-                     f"👑 Генератор случайных чисел выбрал победителя среди активных участников!\n"
-                     f"Победитель: **{winner_mention}**\n\n"
-                     f"🎁 Награда: +{giveaway_bonus} {settings.CURRENCY_NAME} на баланс! Поздравляем! 👏",
-                parse_mode="Markdown"
-            )
-        except Exception: pass
-
-    await callback.answer(f"🎉 Розыгрыш проведен успешно!", show_alert=True)
-
 # --- FSM СЦЕНАРИЙ: ДОБАВЛЕНИЕ НАГРАДЫ ---
 
 @router.callback_query(F.data == "act_add_reward")
@@ -274,7 +239,7 @@ async def process_reward_value(message: Message, state: FSMContext):
     text_input = message.text.strip()
 
     if r_type == "rating" and not text_input.isdigit():
-        await message.answer("❌ Ошибка! Для типа 'Валюта' введите корректное целое число:")
+        await message.answer("❌ Ошибка! Для типа 'Валюта' Введите корректное целое число:")
         return
 
     await state.update_data(reward_value=text_input)
@@ -396,4 +361,3 @@ async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_ses
             except Exception: pass
 
     await callback.answer()
-
