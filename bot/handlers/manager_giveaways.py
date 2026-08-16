@@ -1,5 +1,6 @@
 import random
 from datetime import datetime
+import pytz  # Библиотека для работы с мировыми часовыми поясами
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
@@ -19,50 +20,78 @@ from bot.states import ManagerGiveawaySetup
 
 router = Router(name="manager_giveaways_router")
 
-async def refresh_giveaways_panel(callback_or_message, session: AsyncSession):
-    """Обновляет состояние экранной панели розыгрышей с выводом расписания."""
-    ga_q = select(Giveaway).where(Giveaway.status.in_(["created", "announced"])).order_by(Giveaway.id.desc())
-    active_ga = (await session.execute(ga_q)).scalar_one_or_none()
+GIVEAWAYS_PER_PAGE = 3
 
-    if active_ga:
-        parts = str(active_ga.condition_value).split(":")
-        title_id = int(parts[0])
-        ticket_id = int(parts[1])
-        
-        t_name = settings.parsed_titles.get(title_id).name
-        
-        # Адаптивный вывод условий в панели
-        if ticket_id == 0:
-            cond_str = f"🎖️ Титул от '{t_name}' и выше (Вход БЕСПЛАТНЫЙ, без билетов)"
-        else:
-            ticket_item = await session.get(ShopItem, ticket_id)
-            cond_str = f"🎖️ Титул от '{t_name}' + 🎟️ Билет '{ticket_item.name if ticket_item else 'Удален'}'"
+async def send_giveaways_list_page(callback_or_message, session: AsyncSession, manager_user: User, page: int = 1):
+    """Отрисовка интерактивной сетки всех запланированных розыгрышей чата."""
+    count_query = select(func.count(Giveaway.id)).where(Giveaway.status.in_(["created", "announced"]))
+    total_ga = (await session.execute(count_query)).scalar()
 
-        status_labels = {
-            "created": "⏳ Ожидает анонса",
-            "announced": "🟢 Анонсирован / Сбор участников"
-        }
-
+    buttons = []
+    
+    if total_ga == 0:
         text = (
-            "🎉 **Управление автоматическими розыгрышами**\n\n"
-            "📋 **Текущий запланированный ивент:**\n"
-            f"▪️ **Статус:** {status_labels.get(active_ga.status)}\n"
-            f"▪️ **Приз:** {active_ga.reward_value} ({'💎 Рейтинг' if active_ga.reward_type == 'rating' else '🎒 Мерч'})\n"
-            f"▪️ **Призовых мест:** {active_ga.winners_count}\n"
-            f"📢 **Время анонса:** `{active_ga.announce_at.strftime('%d.%m.%Y %H:%M')}`\n"
-            f"🛑 **Время финала:** `{active_ga.finalize_at.strftime('%d.%m.%Y %H:%M')}`\n\n"
-            f"🔒 **Критерий отбора:** {cond_str}\n\n"
-            "ℹ️ _Бот сам опубликует анонс и подведет итоги в чатах по расписанию через воркер!_"
+            "🎉 **Управление сеткой розыгрышей**\n\n"
+            "❌ В данный момент в календаре нет запланированных автоматических лотерей.\n\n"
+            "Вы можете создать сразу несколько параллельных розыгрышей наперед!"
         )
+        buttons.append([InlineKeyboardButton(text="➕ Создать новый розыгрыш", callback_data="ga_create")])
+        buttons.append([InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")])
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     else:
-        text = (
-            "🎉 **Управление розыгрышами**\n\n"
-            "❌ Запланированных автоматических лотерей сейчас нет.\n\n"
-            "Вы можете создать новый розыгрыш, задав точное время анонса требований "
-            "и время финала. Бот всё сделает за вас!"
+        offset_value = (page - 1) * GIVEAWAYS_PER_PAGE
+        ga_query = (
+            select(Giveaway)
+            .where(Giveaway.status.in_(["created", "announced"]))
+            .order_by(Giveaway.announce_at.asc())
+            .limit(GIVEAWAYS_PER_PAGE)
+            .offset(offset_value)
         )
+        giveaways = (await session.execute(ga_query)).scalars().all()
+        has_next = (page * GIVEAWAYS_PER_PAGE) < total_ga
 
-    reply_markup = get_giveaways_main_keyboard(has_active=bool(active_ga))
+        lines = [f"🎉 **Сетка запланированных розыгрышей (Страница {page})**\n"]
+        
+        # Получаем личный часовой пояс текущего менеджера из БД (по умолчанию UTC)
+        user_tz_str = manager_user.timezone or "UTC"
+        manager_tz = pytz.timezone(user_tz_str)
+
+        for ga in giveaways:
+            # Конвертируем серверное UTC обратно в личный часовой пояс админа для наглядности
+            local_announce = ga.announce_at.replace(tzinfo=pytz.utc).astimezone(manager_tz)
+            local_finalize = ga.finalize_at.replace(tzinfo=pytz.utc).astimezone(manager_tz)
+            
+            parts = str(ga.condition_value).split(":")
+            t_name = settings.parsed_titles.get(int(parts)).name
+            cond_label = f"Титул '{t_name}'" + (f" + Билет №{parts}" if int(parts) > 0 else " (Без билета)")
+            
+            status_label = "⏳ Ожидает" if ga.status == "created" else "📢 Анонсирован"
+
+            lines.append(
+                f"🆔 **ID:** `{ga.id}` | {status_label}\n"
+                f"🎁 Приз: *{ga.reward_value}* ({ga.winners_count} мест)\n"
+                f"📅 Анонс ({user_tz_str}): `{local_announce.strftime('%d.%m.%Y %H:%M')}`\n"
+                f"🛑 Финал ({user_tz_str}): `{local_finalize.strftime('%d.%m.%Y %H:%M')}`\n"
+                f"🔒 Условие: _{cond_label}_\n"
+            )
+            
+            buttons.append([
+                InlineKeyboardButton(text=f"🗑️ Удалить лотерею №{ga.id}", callback_data=f"ga_delete_id:{ga.id}:{page}")
+            ])
+
+        text = "\n".join(lines)
+        
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"ga_list_page:{page-1}"))
+        if has_next:
+            nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"ga_list_page:{page+1}"))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([InlineKeyboardButton(text="➕ Распланировать еще один розыгрыш", callback_data="ga_create")])
+        buttons.append([InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")])
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
 
     if isinstance(callback_or_message, CallbackQuery):
         try: await callback_or_message.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
@@ -72,10 +101,30 @@ async def refresh_giveaways_panel(callback_or_message, session: AsyncSession):
 
 
 @router.callback_query(F.data == "mg_giveaways_panel")
-async def cmd_giveaways_panel_click(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+@router.callback_query(F.data.startswith("ga_list_page:"))
+async def process_giveaways_panel_and_pagination(callback: CallbackQuery, is_manager: bool, db_user: User, db_session: AsyncSession):
     if not is_manager: return
-    await refresh_giveaways_panel(callback, db_session)
+    page = 1
+    if callback.data.startswith("ga_list_page:"):
+        page = int(callback.data.split(":"))
+    await send_giveaways_list_page(callback, db_session, db_user, page=page)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("ga_delete_id:"))
+async def process_ga_delete(callback: CallbackQuery, is_manager: bool, db_user: User, db_session: AsyncSession):
+    if not is_manager: return
+    parts = callback.data.split(":")
+    ga_id = int(parts)
+    page = int(parts)
+
+    ga = await db_session.get(Giveaway, ga_id)
+    if ga:
+        await db_session.delete(ga)
+        await db_session.commit()
+        await callback.answer(f"✅ Розыгрыш №{ga_id} успешно аннулирован и удален из сетки расписания!", show_alert=True)
+    
+    await send_giveaways_list_page(callback, db_session, db_user, page=page)
 
 # --- FSM СЦЕНАРИЙ: НАСТРОЙКА КРИТЕРИЕВ РОЗЫГРЫША ---
 
@@ -83,7 +132,7 @@ async def cmd_giveaways_panel_click(callback: CallbackQuery, is_manager: bool, d
 async def process_ga_create_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     await state.set_state(ManagerGiveawaySetup.waiting_for_reward_type)
-    await callback.message.answer("🎉 **Конструктор розыгрышей [Шаг 1/7]**\n\nВыбери тип приза лотереи:", reply_markup=get_ga_reward_type_keyboard())
+    await callback.message.edit_text("🎉 **Конструктор розыгрышей [Шаг 1/7]**\n\nВыбери тип приза лотереи:", reply_markup=get_ga_reward_type_keyboard(), parse_mode="Markdown")
     await callback.answer()
 
 
@@ -98,7 +147,7 @@ async def process_ga_reward_type(callback: CallbackQuery, state: FSMContext):
         if chosen_type == "rating" else
         "🎒 Введите **название физического мерча** (например: _Игровая клавиатура_):"
     )
-    await callback.message.answer(f"🎉 **Конструктор розыгрышей [Шаг 2/7]**\n\n{prompt}")
+    await callback.message.edit_text(f"🎉 **Конструктор розыгрышей [Шаг 2/7]**\n\n{prompt}", parse_mode="Markdown")
     await callback.answer()
 
 
@@ -143,12 +192,10 @@ async def process_ga_condition_title_chosen(callback: CallbackQuery, state: FSMC
     tickets_q = select(ShopItem).where(and_(ShopItem.is_ticket == True, ShopItem.is_deleted == False))
     tickets = (await db_session.execute(tickets_q)).scalars().all()
     
-    # Модифицируем клавиатуру билетов: добавляем кнопку «Пропустить»
     kb_buttons = []
     for t in tickets:
         kb_buttons.append([InlineKeyboardButton(text=f"🎟️ {t.name}", callback_data=f"ga_save_cond_ticket:{t.id}")])
     
-    # КНОПКА СПАСЕНИЯ: Розыгрыш без билета
     kb_buttons.append([InlineKeyboardButton(text="⏩ Пропустить билет (Только по Титулу)", callback_data="ga_save_cond_ticket:0")])
     kb_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="ga_cancel")])
     reply_markup = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
@@ -157,56 +204,74 @@ async def process_ga_condition_title_chosen(callback: CallbackQuery, state: FSMC
         "🎟️ **Конструктор розыгрышей [Шаг 5/7]**\n\n"
         "Выберите **билет**, наличие которого бот проверит в инвентаре участников.\n\n"
         "👉 _Если вы хотите провести открытый розыгрыш для всех участников с выбранным титулом, нажмите кнопку ниже:_ ",
-        reply_markup=reply_markup
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
     )
     await callback.answer()
 
+# --- FSM СЦЕНАРИЙ: НАСТРОЙКА ВРЕМЕНИ ПО ТАЙМЗОНЕ ПРОФИЛЯ, КОНВЕРТАЦИЯ И СОХРАНЕНИЕ ---
+
 @router.callback_query(ManagerGiveawaySetup.waiting_for_condition_value, F.data.startswith("ga_save_cond_ticket:"))
-async def process_ga_condition_ticket_chosen(callback: CallbackQuery, state: FSMContext):
-    # ИСПРАВЛЕНО: Добавлен индекс [1] для получения ID билета из callback.data
+async def process_ga_condition_ticket_chosen(callback: CallbackQuery, state: FSMContext, db_user: User):
     ticket_id = int(callback.data.split(":")[1])
     await state.update_data(ga_cond_ticket_id=ticket_id)
     
+    user_tz_str = db_user.timezone or "UTC"
     await state.set_state(ManagerGiveawaySetup.waiting_for_announce_time)
     await callback.message.edit_text(
         "📢 **Конструктор розыгрышей [Шаг 6/7]**\n\n"
-        "Введите дату и время **публикации анонса** в чатах.\n"
-        "Формат строго: `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `17.08.2026 15:00`):"
+        "Укажите дату и время **публикации анонса** требований в чатах.\n\n"
+        f"⏱️ Вводите время по вашему часовому поясу профиля: **{user_tz_str}**.\n"
+        "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `17.08.2026 15:00`):",
+        parse_mode="Markdown"
     )
     await callback.answer()
 
 
 @router.message(ManagerGiveawaySetup.waiting_for_announce_time)
-async def process_ga_announce_time(message: Message, state: FSMContext):
+async def process_ga_announce_time(message: Message, state: FSMContext, db_user: User):
     text_input = message.text.strip()
+    user_tz_str = db_user.timezone or "UTC"
     try:
-        dt_announce = datetime.strptime(text_input, "%d.%m.%Y %H:%M")
+        # Локализуем введенную строку времени под часовой пояс менеджера
+        manager_tz = pytz.timezone(user_tz_str)
+        dt_local = datetime.strptime(text_input, "%d.%m.%Y %H:%M")
+        dt_local_localized = manager_tz.localize(dt_local)
+        
+        # Конвертируем в чистое UTC для фонового планировщика сервера
+        dt_utc_announce = dt_local_localized.astimezone(pytz.utc).replace(tzinfo=None)
     except ValueError:
         await message.answer("❌ Ошибка! Неверный формат даты. Введите строго по шаблону `ДД.ММ.ГГГГ ЧЧ:ММ`:")
         return
 
-    await state.update_data(ga_time_announce=dt_announce)
+    await state.update_data(ga_time_announce=dt_utc_announce, ga_raw_local_announce=text_input)
     await state.set_state(ManagerGiveawaySetup.waiting_for_finalize_time)
     await message.answer(
         "🛑 **Конструктор розыгрышей [Шаг 7/7]**\n\n"
-        "Введите дату и время **автоматического финала** лотереи.\n"
-        "Формат строго: `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `18.08.2026 21:00`):"
+        "Укажите дату и время **автоматического подведения итогов** лотереи.\n\n"
+        f"⏱️ Вводите время по вашему часовому поясу профиля: **{user_tz_str}**.\n"
+        "Формат: `ДД.ММ.ГГГГ ЧЧ:ММ` (например, `18.08.2026 21:00`):"
     )
 
 
 @router.message(ManagerGiveawaySetup.waiting_for_finalize_time)
-async def process_ga_finalize_time_and_save(message: Message, state: FSMContext, db_session: AsyncSession):
+async def process_ga_finalize_time_and_save(message: Message, state: FSMContext, db_user: User, db_session: AsyncSession):
     text_input = message.text.strip()
+    user_tz_str = db_user.timezone or "UTC"
     try:
-        dt_finalize = datetime.strptime(text_input, "%d.%m.%Y %H:%M")
+        manager_tz = pytz.timezone(user_tz_str)
+        dt_local = datetime.strptime(text_input, "%d.%m.%Y %H:%M")
+        dt_local_localized = manager_tz.localize(dt_local)
+        
+        dt_utc_finalize = dt_local_localized.astimezone(pytz.utc).replace(tzinfo=None)
     except ValueError:
         await message.answer("❌ Ошибка! Неверный формат даты. Введите строго по шаблону `ДД.ММ.ГГГГ ЧЧ:ММ`:")
         return
 
     data = await state.get_data()
-    dt_announce = data.get("ga_time_announce")
+    dt_utc_announce = data.get("ga_time_announce")
 
-    if dt_finalize <= dt_announce:
+    if dt_utc_finalize <= dt_utc_announce:
         await message.answer("❌ Ошибка! Время финала не может быть раньше или равно времени анонса. Попробуйте еще раз:")
         return
 
@@ -215,42 +280,41 @@ async def process_ga_finalize_time_and_save(message: Message, state: FSMContext,
     combo_value = f"{title_id}:{ticket_id}"
 
     new_ga = Giveaway(
-        reward_type=data.get("ga_reward_type"),
+        reward_type=data.get("ga_reward_type")[0],
         reward_value=data.get("ga_reward_value"),
         winners_count=data.get("ga_winners_count"),
         condition_type="combo",
         condition_value=combo_value,
-        announce_at=dt_announce,
-        finalize_at=dt_finalize,
+        announce_at=dt_utc_announce,
+        finalize_at=dt_utc_finalize,
         status="created"
     )
     db_session.add(new_ga)
     await db_session.commit()
     await state.clear()
 
-    # Сборка анонса для вывода менеджеру
     t_name = settings.parsed_titles.get(title_id).name
     if ticket_id == 0:
-        cond_text = f"🎖️ Наличие титула от **'{t_name}'** и выше (Участие открытое, без билетов)."
+        cond_text = f"🎖️ Наличие титула от **'{t_name}'** и выше (Вход открытый, без билетов)."
     else:
         ticket_item = await db_session.get(ShopItem, ticket_id)
         ticket_name = ticket_item.name if ticket_item else "Билет"
-        cond_text = f"🎖️ Титул от **'{t_name}'** + 🎟️ Билет **'{ticket_name}'** в инвентаре."
+        cond_text = f"🎖️ Титул от **'{t_name}'** + 🎟️ Билет **'{ticket_name}'**."
 
-    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
     await message.answer(
-        f"🎉 **Автоматический розыгрыш успешно запланирован!**\n\n"
+        f"🎉 **Розыгрыш добавлен в календарную сетку!**\n\n"
         f"🔒 **Критерий:** {cond_text}\n"
-        f"📢 **Анонс:** {dt_announce.strftime('%d.%m.%Y %H:%M')}\n"
-        f"🛑 **Финал:** {dt_finalize.strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"Бот сам опубликует требования в чаты и подведет итоги через APScheduler.",
-        reply_markup=get_back_to_menu_keyboard(to_manager=True)
+        f"📢 **Анонс ({user_tz_str}):** {data.get('ga_raw_local_announce')}\n"
+        f"🛑 **Финал ({user_tz_str}):** {text_input}\n\n"
+        f"⚙️ Бот успешно распознал ваш часовой пояс, перевел время в UTC сервера "
+        f"и передал ивент фоновому планировщику задач APScheduler.",
     )
-    await refresh_giveaways_panel(message, db_session)
+    await send_giveaways_list_page(message, db_session, db_user, page=1)
 
 
 @router.callback_query(F.data == "ga_cancel")
-async def process_ga_cancel(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
+async def process_ga_cancel(callback: CallbackQuery, state: FSMContext, db_user: User, db_session: AsyncSession):
     await state.clear()
     await callback.answer("❌ Создание розыгрыша отменено.")
-    await refresh_giveaways_panel(callback, db_session)
+    await send_giveaways_list_page(callback, db_session, db_user, page=1)
+
