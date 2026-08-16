@@ -71,6 +71,9 @@ async def main():
     # 5. Подключаем единый собранный роутер со всеми хэндлерами
     dp.include_router(get_main_router())
 
+    from services.scheduler import start_scheduler
+    start_scheduler(bot)
+
     logger.info(f"Запуск бота {settings.BOT_NAME} в режиме Polling...")
     
     try:
