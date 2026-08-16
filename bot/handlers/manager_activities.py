@@ -263,3 +263,88 @@ async def process_user_open_chest(callback: CallbackQuery, db_user: User, db_ses
                  f"Заявка уже отправлена менеджерам. Статус посылки отслеживайте по кнопке '🎁 Мои Награды'.",
             parse_mode="Markdown"
         )
+
+# Универсальная функция получения настроек из БД (с защитой от отсутствия записи)
+async def get_sys_settings(session: AsyncSession) -> SystemSettings:
+    res = await session.execute(select(SystemSettings).where(SystemSettings.id == 1))
+    sys_settings = res.scalar_one_or_none()
+    if not sys_settings:
+        sys_settings = SystemSettings(id=1, chest_open_price=0, chest_min_title_id=1)
+        session.add(sys_settings)
+        await session.commit()
+    return sys_settings
+
+@router.message(F.text == "🎁 Настройка Сундука / Розыгрышей")
+async def cmd_manager_activities(message: Message, is_manager: bool, db_session: AsyncSession):
+    if not is_manager: return
+    
+    sys_settings = await get_sys_settings(db_session)
+    count_q = select(func.count(ChestReward.id))
+    total_rewards = (await db_session.execute(count_q)).scalar()
+
+    # Извлекаем имя титула по ID из конфига
+    titles = settings.parsed_titles
+    title_info = titles.get(sys_settings.chest_min_title_id)
+    title_name = title_info.name if title_info else "Новичок"
+
+    text = (
+        "🎁 **Управление игровыми механиками чата**\n\n"
+        "Здесь вы можете настраивать интерактив в группах без кодинга и SSH.\n\n"
+        f"📋 **Текущие настройки сундука:**\n"
+        f"▪️ Цена открытия: **{sys_settings.chest_open_price}** {settings.CURRENCY_NAME}\n"
+        f"▪️ Минимальный титул: **{title_name}**\n"
+        f"📦 Уникальных наград в пуле: **{total_rewards}**\n\n"
+        "👇 Используйте кнопки для изменения параметров или запуска интерактивов:"
+    )
+    await message.answer(text, reply_markup=get_activities_main_keyboard(), parse_mode="Markdown")
+
+# --- СЦЕНАРИЙ ИЗМЕНЕНИЯ ЦЕНЫ КЛЮЧА ---
+@router.types.CallbackQuery(F.data == "act_set_price")
+async def process_set_price_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
+    if not is_manager: return
+    await state.set_state(ManagerChestSettings.waiting_for_chest_price)
+    await callback.message.answer("💳 **Введите новую стоимость открытия сундука** (целое число от `0` до `5000`):")
+    await callback.answer()
+
+@router.message(ManagerChestSettings.waiting_for_chest_price)
+async def process_save_price(message: Message, state: FSMContext, db_session: AsyncSession):
+    text_input = message.text.strip()
+    if not text_input.isdigit():
+        await message.answer("❌ Ошибка! Введите корректное целое число:")
+        return
+
+    sys_settings = await get_sys_settings(db_session)
+    sys_settings.chest_open_price = int(text_input)
+    await db_session.commit()
+    await state.clear()
+
+    await message.answer(f"✅ Стоимость открытия сундука успешно изменена на **{text_input}** {settings.CURRENCY_NAME}!")
+    await cmd_manager_activities(message, is_manager=True, db_session=db_session)
+
+# --- СЦЕНАРИЙ ИЗМЕНЕНИЯ ТРЕБУЕМОГО ТИТУЛА ---
+@router.types.CallbackQuery(F.data == "act_set_title")
+async def process_set_title_start(callback: CallbackQuery, is_manager: bool):
+    if not is_manager: return
+    titles = settings.parsed_titles
+    await callback.message.answer(
+        "🎖️ **Выберите минимальный титул**, начиная с которого пользователи смогут претендовать на сундук:",
+        reply_markup=get_titles_choice_keyboard(titles)
+    )
+    await callback.answer()
+
+@router.types.CallbackQuery(F.data.startswith("act_save_title:"))
+async def process_save_title(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    if not is_manager: return
+    title_id = int(callback.data.split(":")[1])
+
+    sys_settings = await get_sys_settings(db_session)
+    sys_settings.chest_min_title_id = title_id
+    await db_session.commit()
+
+    titles = settings.parsed_titles
+    new_title_name = titles.get(title_id).name
+
+    await callback.answer(f"✅ Требуемый титул изменен на '{new_title_name}'!", show_alert=True)
+    await cmd_manager_activities(callback.message, is_manager, db_session)
+    try: await callback.message.delete()
+    except Exception: pass
