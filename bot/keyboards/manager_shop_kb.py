@@ -2,24 +2,23 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from config import settings
 
 def get_manager_shop_keyboard(items: list) -> InlineKeyboardMarkup:
-    """Генерирует список товаров для менеджера с кнопкой добавления нового."""
+    """Генерирует список товаров для менеджера с кнопкой добавления и ВЫХОДА."""
     buttons = []
     
-    # Выводим существующие товары в виде кнопок
     for item in items:
         buttons.append([
             InlineKeyboardButton(text=f"📦 {item.name} ({item.price} {settings.CURRENCY_NAME})", 
                                  callback_data=f"mg_shop_view:{item.id}")
         ])
         
-    # Кнопка добавления нового товара
-    buttons.append([
-        InlineKeyboardButton(text="➕ Добавить новый товар", callback_data="mg_shop_add")
-    ])
+    buttons.append([InlineKeyboardButton(text="➕ Добавить новый товар", callback_data="mg_shop_add")])
+    
+    # ИСПРАВЛЕНО: Кнопка возврата в корень админки
+    buttons.append([InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 def get_item_admin_keyboard(item_id: int) -> InlineKeyboardMarkup:
-    """Кнопки управления конкретным товаром в панели менеджера."""
+    """Кнопки управления конкретным товаром."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="❌ Удалить товар из магазина", callback_data=f"mg_shop_del:{item_id}")],
         [InlineKeyboardButton(text="↩️ Назад к ассортименту", callback_data="mg_shop_back")]
