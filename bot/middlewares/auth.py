@@ -15,7 +15,6 @@ class AuthMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: Dict[str, Any]
     ) -> Any:
-        # Middleware работает с сообщениями и нажатиями кнопок (CallbackQuery)
         user_tg = None
         if isinstance(event, Message):
             user_tg = event.from_user
@@ -25,7 +24,6 @@ class AuthMiddleware(BaseMiddleware):
         if not user_tg or user_tg.is_bot:
             return await handler(event, data)
 
-        # Получаем асинхронную сессию БД, которую мы позже подключим в диспетчер
         session: AsyncSession = data.get("db_session")
         if not session:
             return await handler(event, data)
@@ -45,14 +43,16 @@ class AuthMiddleware(BaseMiddleware):
             await session.commit()
             await session.refresh(user)
 
-        # Если пользователь забанен — прекращаем обработку, бот ему не ответит
+        # Если пользователь забанен — прекращаем обработку
         if user.is_banned:
             if isinstance(event, Message):
                 await event.answer("⛔ Ваш аккаунт заблокирован менеджером.")
             return
 
-        # Передаем объект пользователя и его статус менеджера дальше в хэндлеры
+        # ЯВНО записываем данные в словарь data для передачи в хэндлеры
         data["db_user"] = user
         data["is_manager"] = user_tg.id in settings.managers_list
 
+        # Возвращаем выполнение следующего звена с модифицированным data
         return await handler(event, data)
+
