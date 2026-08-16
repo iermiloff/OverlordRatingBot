@@ -3,11 +3,11 @@ version: '3.8'
 services:
   db:
     image: postgres:15-alpine
-    container_name: rating_bot_db
+    container_name: OverlordRatingBot_db
     restart: always
     environment:
       POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: secret_pass
+      POSTGRES_PASSWORD: secret_pass # Должно совпадать с паролем в .env DATABASE_URL
       POSTGRES_DB: rating_bot
     volumes:
       - pgdata:/var/lib/postgresql/data
@@ -16,7 +16,7 @@ services:
 
   bot:
     build: .
-    container_name: rating_bot_app
+    container_name: OverlordRatingBot_app
     restart: always
     depends_on:
       - db
@@ -34,6 +34,7 @@ services:
       - .env
     # Запускает APScheduler внутри скрипта для антифрода и таймеров сундуков
     command: python -m services.antifraud 
+
 
 volumes:
   pgdata:
