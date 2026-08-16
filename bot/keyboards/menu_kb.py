@@ -1,15 +1,13 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from config import settings
 
 def get_user_inline_menu() -> InlineKeyboardMarkup:
-    """Генерирует главное экранное меню для обычного пользователя."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📊 Моя статистика", callback_data="user_stats"),
             InlineKeyboardButton(text="🛍️ Магазин товаров", callback_data="shop_page:1")
         ],
         [
-        #    InlineKeyboardButton(text="🤝 Партнерка", callback_data="user_referrals"),
+          #  InlineKeyboardButton(text="🤝 Партнерка", callback_data="user_referrals"),
             InlineKeyboardButton(text="🎖️ Список титулов", callback_data="user_titles")
         ],
         [
@@ -17,12 +15,12 @@ def get_user_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="💬 Наши Чаты", callback_data="user_chats")
         ],
         [
+            InlineKeyboardButton(text="🎒 Мой Инвентарь", callback_data="user_inventory"), # СЮДА: Инвентарь
             InlineKeyboardButton(text="🎁 Мои Награды", callback_data="rewards_page:1")
         ]
     ])
 
 def get_manager_inline_menu() -> InlineKeyboardMarkup:
-    """Генерирует главное экранное меню для менеджера/администратора."""
     return InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="👥 Список пользователей", callback_data="mg_users_page:1"),
@@ -36,12 +34,12 @@ def get_manager_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⚙️ Настройка Чатов и Промо", callback_data="mg_settings_panel")
         ],
         [
-            InlineKeyboardButton(text="🎁 Сундуки и Розыгрыши", callback_data="mg_activities_panel")
+            InlineKeyboardButton(text="📦 Настройка Сундуков", callback_data="mg_activities_panel"), # РАЗДЕЛЕНО
+            InlineKeyboardButton(text="🎉 Настройка Розыгрышей", callback_data="mg_giveaways_panel") # РАЗДЕЛЕНО
         ]
     ])
 
 def get_back_to_menu_keyboard(to_manager: bool = False) -> InlineKeyboardMarkup:
-    """Универсальная экранная кнопка возврата для предотвращения тупиков в интерфейсе."""
     target = "main_menu_manager" if to_manager else "main_menu_user"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="↩️ Вернуться в главное меню", callback_data=target)]
