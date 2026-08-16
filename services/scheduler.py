@@ -6,7 +6,7 @@ from sqlalchemy import select, and_
 
 from config import settings
 from database.connection import AsyncSessionLocal
-from database.models import Giveaway, User, ChatConfig, ShopItem, Inventory
+from database.models import Giveaway, User, ChatConfig, ShopItem, Inventory, Order, OrderStatus
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
@@ -22,15 +22,17 @@ async def check_and_process_giveaways(bot):
         
         for ga in to_announce:
             parts = str(ga.condition_value).split(":")
-            title_id = int(parts[0])  # ИСПРАВЛЕНО: Добавлен точный индекс 0
-            ticket_id = int(parts[1]) # ИСПРАВЛЕНО: Добавлен точный индекс 1
+            title_id = int(parts[0])
+            ticket_id = int(parts[1])
             
             t_name = settings.parsed_titles.get(title_id).name
             
-            # Динамически форматируем призовой баланс с валютой и эмодзи из настроек .env
-            prize_currency = f"{settings.CURRENCY_EMOJI} {ga.reward_value} {settings.CURRENCY_NAME}" if ga.reward_type == "rating" else f"🎒 {ga.reward_value}"
+            is_rating_prize = ga.reward_type == "rating" or str(ga.reward_value).strip().isdigit()
+            if is_rating_prize:
+                prize_currency = f"{settings.CURRENCY_EMOJI} {ga.reward_value} {settings.CURRENCY_NAME}"
+            else:
+                prize_currency = f"🎒 {ga.reward_value}"
 
-            # Адаптивно перестраиваем текст требований под выбранный админом режим (combo или открытый)
             if ticket_id == 0:
                 cond_text = f"1. 🎖️ Наличие титула от **'{t_name}'** и выше.\n" \
                             f"2. 🔓 Участие **БЕСПЛАТНОЕ**, лотерейные билеты не требуются!"
@@ -65,17 +67,21 @@ async def check_and_process_giveaways(bot):
         
         for ga in to_finalize:
             parts = str(ga.condition_value).split(":")
-            title_id = int(parts[0])  # ИСПРАВЛЕНО: Добавлен точный индекс 0
-            ticket_id = int(parts[1]) # ИСПРАВЛЕНО: Добавлен точный индекс 1
+            title_id = int(parts[0])
+            ticket_id = int(parts[1])
             
             min_rating = settings.parsed_titles.get(title_id).min_rating
-            prize_currency = f"{settings.CURRENCY_EMOJI} {ga.reward_value} {settings.CURRENCY_NAME}" if ga.reward_type == "rating" else f"*{ga.reward_value}*"
+            
+            is_rating_prize = ga.reward_type == "rating" or str(ga.reward_value).strip().isdigit()
+            if is_rating_prize:
+                prize_currency = f"{settings.CURRENCY_EMOJI} {ga.reward_value} {settings.CURRENCY_NAME}"
+            else:
+                prize_currency = f"🎒 *{ga.reward_value}*"
 
-            # Адаптивная выборка участников из базы данных
             if ticket_id == 0:
                 users_q = select(User).where(and_(User.lifetime_rating >= min_rating, User.is_banned == False))
                 query_res = await session.execute(users_q)
-                eligible_records = [(u, 1) for u in query_res.scalars().all()] # У всех по 1 равному шансу
+                eligible_records = [(u, 1) for u in query_res.scalars().all()]
             else:
                 users_q = select(User, Inventory.quantity).join(Inventory, Inventory.user_id == User.tg_id).where(and_(
                     User.lifetime_rating >= min_rating, Inventory.item_id == ticket_id, Inventory.quantity >= 1, User.is_banned == False
@@ -86,7 +92,6 @@ async def check_and_process_giveaways(bot):
                 ga.status = "finished"
                 continue
 
-            # Построение лотерейного барабана весов
             wheel = []
             user_ticket_map = {}
             for user_obj, qty in eligible_records:
@@ -102,7 +107,6 @@ async def check_and_process_giveaways(bot):
                     winners.append(chosen)
                 wheel = [u for u in wheel if u.tg_id != chosen.tg_id]
 
-            # Проведение начислений и утилизация купонов
             mentions = []
             for w in winners:
                 if ticket_id > 0:
@@ -111,21 +115,45 @@ async def check_and_process_giveaways(bot):
                     if ticket: 
                         ticket.quantity -= 1
 
-                if ga.reward_type == "rating":
+                if is_rating_prize:
                     w.current_rating += int(ga.reward_value)
                     w.lifetime_rating += int(ga.reward_value)
+                else:
+                    # ИСПРАВЛЕНО: Явно пишем OrderStatus.CREATED.value для точного совпадения со строковым фильтром CRM
+                    new_order = Order(
+                        user_id=w.tg_id, 
+                        source="giveaway", 
+                        item_name=f"[РОЗЫГРЫШ] {ga.reward_value}",
+                        status=OrderStatus.CREATED.value, 
+                        delivery_data="Выиграно в автоматическом розыгрыше чата. Предоставьте данные менеджеру."
+                    )
+                    session.add(new_order)
+                    
+                    # ИСПРАВЛЕНО: Мгновенный пуш-уведомление менеджерам о выигрыше мерча в фоне
+                    for manager_id in settings.managers_list:
+                        try:
+                            await bot.send_message(
+                                chat_id=manager_id,
+                                text=f"🎁 **Розыгрыш в чате завершен! Мерч ждет отправки!**\n\n👤 Победитель: @{w.username or w.tg_id}\n🎒 Награда: *{ga.reward_value}*\nЗаявка автоматически добавлена в раздел '📥 Заявки/Заказы'.",
+                                parse_mode="Markdown"
+                            )
+                        except Exception: pass
                 
                 qty_label = f" _(купон из {user_ticket_map[w.tg_id]} билетов)_" if ticket_id > 0 else ""
                 mentions.append(f"👑 @{w.username or w.full_name}{qty_label}")
 
-            # Публикация итогов лотереи по чатам
+            if ticket_id == 0:
+                footer_status_text = "Награды уже успешно зачислены в ваши личные кабинеты! 👏"
+            else:
+                footer_status_text = "Счастливые билеты успешно списаны, а награды уже зачислены на ваши балансы! 👏"
+
             chats = (await session.execute(select(ChatConfig).where(ChatConfig.is_active == True))).scalars().all()
             winners_str = "\n".join(mentions)
             text_results = (
                 "🎉 **АВТОМАТИЧЕСКИЙ РОЗЫГРЫШ ЗАВЕРШЕН!** 🎉\n\n"
                 f"🎁 **Разыгранный приз:** {prize_currency}\n"
                 f"🏆 **Список наших счастливых победителей:**\n{winners_str}\n\n"
-                "Поздравляем счастливчиков! Счастливые билеты списаны, а награды уже зачислены на ваши балансы! 👏👏"
+                f"Поздравляем счастливчиков! {footer_status_text}"
             )
             for chat in chats:
                 try: await bot.send_message(chat_id=chat.id, text=text_results, parse_mode="Markdown")
@@ -133,7 +161,7 @@ async def check_and_process_giveaways(bot):
                 
             ga.status = "finished"
             
-        await session.commit()
+        await session.commit() # Атомарный коммит всех созданных ордеров и балансов в базу
 
 def start_scheduler(bot):
     """Запуск фонового планировщика внутри главного процесса asyncio."""
