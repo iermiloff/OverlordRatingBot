@@ -17,7 +17,7 @@ async def process_af_callback_ban(callback: CallbackQuery, is_manager: bool, db_
     """Атомарный подтвержденный бан кликера прямо из текста экстренного уведомления."""
     if not is_manager: return
     
-    # ИСПРАВЛЕНО: Добавлен точный индекс [1] для извлечения ID юзера из callback.data
+    # Извлекаем ID целевого юзера по индексу 1
     target_user_id = int(callback.data.split(":")[1])
     user_obj = await db_session.get(User, target_user_id)
     
@@ -29,7 +29,6 @@ async def process_af_callback_ban(callback: CallbackQuery, is_manager: bool, db_
         await callback.answer("ℹ️ Этот аккаунт уже находится в черном списке.", show_alert=True)
         return
 
-    # Включаем перманентную блокировку и сжигаем накопленную игровую валюту
     user_obj.is_banned = True
     user_obj.current_rating = 0
     user_obj.antifraud_reason = f"🔨 Забанен оверлордом за использование автоматизации кликов."
@@ -39,7 +38,7 @@ async def process_af_callback_ban(callback: CallbackQuery, is_manager: bool, db_
         await callback.message.edit_text(
             f"{callback.message.text}\n\n"
             f"❌ <b>ВЕРДИКТ СИСТЕМЫ:</b> Нарушитель успешно заблокирован. "
-            f"Его текущий кошелек полностью обнулен, начисления заморожены.",
+            f"Его кошелек обнулен, начисления заморожены.",
             reply_markup=None,
             parse_mode="HTML"
         )
@@ -53,7 +52,7 @@ async def process_af_callback_pardon(callback: CallbackQuery, is_manager: bool, 
     """Снятие обвинений в спаме с пользователя прямо из инлайн-карточки алерта."""
     if not is_manager: return
     
-    # ИСПРАВЛЕНО: Добавлен точный индекс [1] для извлечения ID юзера из callback.data
+    # Извлекаем ID целевого юзера по индексу 1
     target_user_id = int(callback.data.split(":")[1])
     user_obj = await db_session.get(User, target_user_id)
     
@@ -61,7 +60,6 @@ async def process_af_callback_pardon(callback: CallbackQuery, is_manager: bool, 
         await callback.answer("❌ Пользователь не найден.", show_alert=True)
         return
 
-    # Очищаем подозрительный статус
     user_obj.is_suspicious = False
     user_obj.antifraud_reason = None
     await db_session.commit()
@@ -70,7 +68,7 @@ async def process_af_callback_pardon(callback: CallbackQuery, is_manager: bool, 
         await callback.message.edit_text(
             f"{callback.message.text}\n\n"
             f"✅ <b>ВЕРДИКТ СИСТЕМЫ:</b> Обвинения полностью сняты менеджером {callback.from_user.mention_html()}. "
-            f"Пользователь помилован и продолжает участие в игровой активности.",
+            f"Пользователь помилован.",
             reply_markup=None,
             parse_mode="HTML"
         )
@@ -151,11 +149,10 @@ async def send_antifraud_panel_page(callback_or_message, session: AsyncSession, 
     else:
         await callback_or_message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
 
-
 @router.callback_query(F.data.startswith("af_page:"))
 async def process_antifraud_panel_click(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
-    # ИСПРАВЛЕНО: Добавлен точный индекс 1 для извлечения номера страницы из callback.data
-    page = int(callback.data.split(":"))
+    # СТРОГО ИСПРАВЛЕНО: Явно указан индекс [1] для извлечения числа из списка split
+    page = int(callback.data.split(":")[1])
     await send_antifraud_panel_page(callback, db_session, page=page)
     await callback.answer()
