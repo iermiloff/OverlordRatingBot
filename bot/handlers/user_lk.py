@@ -23,7 +23,7 @@ async def show_user_chats(callback: CallbackQuery, db_session: AsyncSession):
         await callback.answer()
         return
 
-    lines = ["💬 **Наши официальные чаты активности:**\n", "Общайтесь in этих группах, чтобы зарабатывать рейтинг и повышать свой ранг:\n"]
+    lines = ["💬 **Наши официальные чаты активности:**\n", "Общайтесь в этих группах, чтобы зарабатывать рейтинг и повышать свой ранг:\n"]
     for idx, chat in enumerate(chats, start=1):
         if chat.invite_link:
             lines.append(f"{idx}. 🔗 [{chat.title}]({chat.invite_link})")
@@ -54,7 +54,6 @@ async def show_user_referrals(callback: CallbackQuery, db_user: User, db_session
     )
     await callback.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="Markdown")
     await callback.answer()
-
 
 # --- РАЗДЕЛ ЛИЧНОЙ СТАТИСТИКИ (АДАПТИВНАЯ ГЕЙМИФИКАЦИЯ) ---
 
@@ -129,7 +128,6 @@ async def show_user_stats(callback: CallbackQuery, db_user: User, db_session: As
     await callback.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="HTML")
     await callback.answer()
 
-
 # --- СТАТИЧЕСКИЙ СПИСОК ТИТУЛОВ ДЛЯ СПРАВКИ ---
 
 @router.callback_query(F.data == "user_titles")
@@ -143,7 +141,8 @@ async def show_user_titles_list(callback: CallbackQuery):
         "но покупка мерча и билетов отдаляет вас от следующего левела! 💸\n"
     ]
 
-    for t_id, t in sorted(titles.items(), key=lambda x: x.min_rating):
+    # ИСПРАВЛЕНО: Сортируем кортежи .items() по полю min_rating через индекс [1] объекта
+    for t_id, t in sorted(titles.items(), key=lambda x: x[1].min_rating):
         lines.append(f"▪️ Титул **\"{t.name}\"** — от `{t.min_rating}` XP")
 
     text = "\n".join(lines)
