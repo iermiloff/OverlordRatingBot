@@ -31,11 +31,11 @@ def get_manager_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🔒 Антифрод-система", callback_data="af_page:1")
         ],
         [
-            InlineKeyboardButton(text="⚙️ Настройка Чатов и Промо", callback_data="mg_settings_panel")
+            InlineKeyboardButton(text="⚙️ Настройка Чатов, Промо и Времени", callback_data="mg_settings_panel")
         ],
         [
-            InlineKeyboardButton(text="📦 Настройка Сундуков", callback_data="mg_activities_panel"), # РАЗДЕЛЕНО
-            InlineKeyboardButton(text="🎉 Настройка Розыгрышей", callback_data="mg_giveaways_panel") # РАЗДЕЛЕНО
+            InlineKeyboardButton(text="📦 Настройка Сундуков", callback_data="mg_activities_panel"),
+            InlineKeyboardButton(text="🎉 Настройка Розыгрышей", callback_data="mg_giveaways_panel")
         ]
     ])
 
