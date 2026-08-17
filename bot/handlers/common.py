@@ -2,7 +2,7 @@ from aiogram import Router, F
 from aiogram.filters import CommandStart, Command
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_  # ✅ ИСПРАВЛЕНО: Добавлен импорт and_
 
 from config import settings
 from database.models import ChatConfig, PromoChannel, User, ActivityLog
@@ -12,7 +12,7 @@ router = Router(name="common_router")
 
 # --- КОМАНДА /start СТРОГО В ЛИЧКЕ БОТА (ЗАЩИТА ЧАТА ОТ КАШИ) ---
 
-@router.message(CommandStart(), F.chat.type == "private") # ИСПРАВЛЕНО: реагирует только в приватных диалогах
+@router.message(CommandStart(), F.chat.type == "private")
 async def cmd_start(message: Message, db_user: User):
     """Приветственный хэндлер при команде /start в личных сообщениях."""
     text = (
@@ -62,6 +62,8 @@ async def back_to_manager_menu(callback: CallbackQuery, is_manager: bool):
         try: await callback.message.edit_text(text, reply_markup=get_manager_inline_menu())
         except Exception: await callback.message.answer(text, reply_markup=get_manager_inline_menu())
     await callback.answer()
+
+
 # --- ГРУППОВАЯ КОМАНДА /stats ДЛЯ ПУБЛИЧНЫХ ЧАТОВ ---
 
 @router.message(Command("stats"), F.chat.type.in_(["group", "supergroup"]))
@@ -97,6 +99,3 @@ async def cmd_group_stats(message: Message, db_user: User, db_session: AsyncSess
     )
 
     await message.answer(stats_text, parse_mode="HTML")
-
-
-
