@@ -11,21 +11,24 @@ from database.models import User, ActivityLog
 
 logger = logging.getLogger(__name__)
 
-# Критический порог стандартного отклонения в секундах. 
-# Если разброс интервалов между сообщениями меньше 3.5 секунд — это гарантированный кликер/скрипт.
 AF_THRESHOLD_SIGMA = 3.5 
 MIN_MESSAGES_TO_ANALYZE = 8
 
 class AntiFraudMathMiddleware(BaseMiddleware):
     async def __call__(self, handler, event: Message, data: dict):
-        # Проверяем только текстовые сообщения внутри активных групповых чатов
-        if not isinstance(event, Message) or not event.chat.type.in_(["group", "supergroup"]) or not event.text:
+        # ИСПРАВЛЕНО: Заменен метод .in_() на стандартный оператор Python `in` для строки chat.type
+        if not isinstance(event, Message) or event.chat.type not in ["group", "supergroup"] or not event.text:
             return await handler(event, data)
 
         user_id = event.from_user.id
         
-        # Исключение: Менеджеры системы никогда не проверяются антифродом
         if user_id in settings.managers_list:
+            return await handler(event, data)
+
+        db_session: AsyncSession = data.get("db_session")
+        db_user: User = data.get("db_user")
+
+        if not db_session or not db_user:
             return await handler(event, data)
 
         db_session: AsyncSession = data.get("db_session")
