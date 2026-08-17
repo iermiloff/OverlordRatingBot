@@ -1,7 +1,7 @@
 from aiogram import Router, F
 from aiogram.types import CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 
 from config import settings
 from database.models import User, ChatConfig, ActivityLog
@@ -23,7 +23,7 @@ async def show_user_chats(callback: CallbackQuery, db_session: AsyncSession):
         await callback.answer()
         return
 
-    lines = ["💬 **Наши официальные чаты активности:**\n", "Общайтесь в этих группах, чтобы зарабатывать рейтинг и повышать свой ранг:\n"]
+    lines = ["💬 **Наши официальные чаты активности:**\n", "Общайтесь in этих группах, чтобы зарабатывать рейтинг и повышать свой ранг:\n"]
     for idx, chat in enumerate(chats, start=1):
         if chat.invite_link:
             lines.append(f"{idx}. 🔗 [{chat.title}]({chat.invite_link})")
@@ -42,7 +42,6 @@ async def show_user_referrals(callback: CallbackQuery, db_user: User, db_session
     bot_info = await callback.bot.get_me()
     ref_link = f"https://t.me{bot_info.username}?start={db_user.tg_id}"
 
-    # Считаем количество приглашенных пользователей
     count_q = select(func.count(User.tg_id)).where(User.referrer_id == db_user.tg_id)
     total_refs = (await db_session.execute(count_q)).scalar() or 0
 
@@ -56,12 +55,12 @@ async def show_user_referrals(callback: CallbackQuery, db_user: User, db_session
     await callback.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="Markdown")
     await callback.answer()
 
+
 # --- РАЗДЕЛ ЛИЧНОЙ СТАТИСТИКИ (АДАПТИВНАЯ ГЕЙМИФИКАЦИЯ) ---
 
 @router.callback_query(F.data == "user_stats")
 async def show_user_stats(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
     """Выводит личную карточку статистики пользователя в ЛК с учетом штрафов за траты."""
-    # Считаем количество отправленных текстовых сообщений
     msg_count_q = select(func.count(ActivityLog.id)).where(
         and_(
             ActivityLog.user_id == db_user.tg_id,
@@ -70,11 +69,9 @@ async def show_user_stats(callback: CallbackQuery, db_user: User, db_session: As
     )
     total_messages = (await db_session.execute(msg_count_q)).scalar() or 0
 
-    # Разворачиваем конфигурацию титулов проекта
     titles = settings.parsed_titles
     sorted_titles = sorted(titles.values(), key=lambda x: x.min_rating)
 
-    # 1. ТЕКУЩИЙ ТИТУЛ: Считается по несгораемому историческому максимуму (lifetime_rating)
     current_title_name = "Новичок"
     current_title_id = 1
     current_title_min = 0
@@ -84,7 +81,6 @@ async def show_user_stats(callback: CallbackQuery, db_user: User, db_session: As
             current_title_id = t.id
             current_title_min = t.min_rating
 
-    # 2. ПРОГРЕСС ДО СЛЕДУЮЩЕГО ТИТУЛА: Считается от актуального кошелька (current_rating)
     next_title_name = "Максимум"
     next_title_required = 0
     has_next = False
@@ -96,7 +92,6 @@ async def show_user_stats(callback: CallbackQuery, db_user: User, db_session: As
             has_next = True
             break
 
-    # Формируем шкалу прогресса и расчет остатка опыта от текущего баланса
     if has_next:
         if db_user.current_rating >= next_title_required:
             progress_bar = "██████████ 100%"
@@ -104,16 +99,14 @@ async def show_user_stats(callback: CallbackQuery, db_user: User, db_session: As
         else:
             needed = next_title_required - db_user.current_rating
             
-            # Рассчитываем процент прогресса внутри текущего левела относительно кошелька
             range_total = next_title_required - current_title_min
             current_progress = db_user.current_rating - current_title_min
             if current_progress < 0: 
                 current_progress = 0
                 
             percent = int((current_progress / range_total) * 100) if range_total > 0 else 0
-            percent = min(max(percent, 0), 99) # Защита границ
+            percent = min(max(percent, 0), 99)
             
-            # Рендерим красивый визуальный прогресс-бар
             filled_blocks = int(percent // 10)
             progress_bar = f"{'█' * filled_blocks}{'░' * (10 - filled_blocks)} {percent}%"
             remains_text = f"🎯 До титула <b>'{next_title_name}'</b> осталось накопить: <b>{needed}</b> {settings.CURRENCY_NAME}"
@@ -136,6 +129,7 @@ async def show_user_stats(callback: CallbackQuery, db_user: User, db_session: As
     await callback.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="HTML")
     await callback.answer()
 
+
 # --- СТАТИЧЕСКИЙ СПИСОК ТИТУЛОВ ДЛЯ СПРАВКИ ---
 
 @router.callback_query(F.data == "user_titles")
@@ -149,7 +143,7 @@ async def show_user_titles_list(callback: CallbackQuery):
         "но покупка мерча и билетов отдаляет вас от следующего левела! 💸\n"
     ]
 
-    for t_id, t in sorted(titles.items(), key=lambda x: x[1].min_rating):
+    for t_id, t in sorted(titles.items(), key=lambda x: x.min_rating):
         lines.append(f"▪️ Титул **\"{t.name}\"** — от `{t.min_rating}` XP")
 
     text = "\n".join(lines)
