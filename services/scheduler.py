@@ -2,7 +2,7 @@ import logging
 import random
 from datetime import datetime
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, and_
+from sqlalchemy import select, and_, delete
 
 from config import settings
 from database.connection import AsyncSessionLocal
@@ -27,6 +27,7 @@ async def check_and_process_giveaways(bot):
             
             t_name = settings.parsed_titles.get(title_id).name
             
+            # Умное распознавание типа приза (если только цифры — это валюта рейтинга)
             is_rating_prize = ga.reward_type == "rating" or str(ga.reward_value).strip().isdigit()
             if is_rating_prize:
                 prize_currency = f"{settings.CURRENCY_EMOJI} {ga.reward_value} {settings.CURRENCY_NAME}"
@@ -42,7 +43,9 @@ async def check_and_process_giveaways(bot):
                 ticket_name = ticket_item.name if ticket_item else "Удаленный билет"
                 cond_text = f"1. 🎖️ Наличие титула от **'{t_name}'** и выше.\n" \
                             f"2. 🎟️ Наличие билета **'{ticket_name}'** в вашем инвентаре."
-                footer_text = f"📈 _Покупайте билеты в '🛍️ Магазин товаров'! Каждый билет пропорционально умножает ваши шансы в лотерейном барабане бота!_"
+                # ИСПРАВЛЕНО: Честное и точное предупреждение для участников
+                footer_text = f"📈 _Покупайте билеты в '🛍️ Магазин товаров'! Каждый билет пропорционально умножает ваши шансы в лотерейном барабане бота!_\n\n" \
+                              f"⚠️ **ВНИМАНИЕ:** В случае победы у счастливчика **сгорают ВСЕ билеты данного типа**, обнуляя его шансы для следующего раунда! У проигравших билеты сохраняются! 🎇"
 
             chats = (await session.execute(select(ChatConfig).where(ChatConfig.is_active == True))).scalars().all()
             
@@ -108,18 +111,13 @@ async def check_and_process_giveaways(bot):
                 wheel = [u for u in wheel if u.tg_id != chosen.tg_id]
 
             mentions = []
-            for w in winners:
-                if ticket_id > 0:
-                    inv_q = select(Inventory).where(and_(Inventory.user_id == w.tg_id, Inventory.item_id == ticket_id))
-                    ticket = (await session.execute(inv_q)).scalar_one_or_none()
-                    if ticket: 
-                        ticket.quantity -= 1
+            winner_ids = [w.tg_id for w in winners]
 
+            for w in winners:
                 if is_rating_prize:
                     w.current_rating += int(ga.reward_value)
                     w.lifetime_rating += int(ga.reward_value)
                 else:
-                    # ИСПРАВЛЕНО: Явно пишем OrderStatus.CREATED.value для точного совпадения со строковым фильтром CRM
                     new_order = Order(
                         user_id=w.tg_id, 
                         source="giveaway", 
@@ -129,23 +127,31 @@ async def check_and_process_giveaways(bot):
                     )
                     session.add(new_order)
                     
-                    # ИСПРАВЛЕНО: Мгновенный пуш-уведомление менеджерам о выигрыше мерча в фоне
                     for manager_id in settings.managers_list:
                         try:
                             await bot.send_message(
                                 chat_id=manager_id,
-                                text=f"🎁 **Розыгрыш в чате завершен! Мерч ждет отправки!**\n\n👤 Победитель: @{w.username or w.tg_id}\n🎒 Награда: *{ga.reward_value}*\nЗаявка автоматически добавлена в раздел '📥 Заявки/Заказы'.",
+                                text=f"🎁 **Розыгрыш в чате завершен! Мерч ждет отправки!**\n\n"
+                                     f"👤 Победитель: @{w.username or w.tg_id}\n"
+                                     f"🎒 Награда: *{ga.reward_value}*\n"
+                                     f"Заявка автоматически добавлена в раздел '📥 Заявки/Заказы'.",
                                 parse_mode="Markdown"
                             )
                         except Exception: pass
                 
-                qty_label = f" _(купон из {user_ticket_map[w.tg_id]} билетов)_" if ticket_id > 0 else ""
+                qty_label = f" _(заявил {user_ticket_map[w.tg_id]} шт. билетов)_" if ticket_id > 0 else ""
                 mentions.append(f"👑 @{w.username or w.full_name}{qty_label}")
 
-            if ticket_id == 0:
-                footer_status_text = "Награды уже успешно зачислены в ваши личные кабинеты! 👏"
+            # ИСПРАВЛЕНО: Сжигаем ВСЕ билеты этого типа строго у ПОБЕДИТЕЛЕЙ [INDEX: 0.1.7]. У проигравших всё остается на руках!
+            if ticket_id > 0 and winner_ids:
+                burn_query = delete(Inventory).where(and_(
+                    Inventory.item_id == ticket_id,
+                    Inventory.user_id.in_(winner_ids)
+                ))
+                await session.execute(burn_query)
+                footer_status_text = "Победители полностью обнулили свои билеты! У остальных участников купоны сохранены для следующих лотерей! 🔥"
             else:
-                footer_status_text = "Счастливые билеты успешно списаны, а награды уже зачислены на ваши балансы! 👏"
+                footer_status_text = "Награды уже успешно зачислены в ваши личные кабинеты! 👏"
 
             chats = (await session.execute(select(ChatConfig).where(ChatConfig.is_active == True))).scalars().all()
             winners_str = "\n".join(mentions)
@@ -161,10 +167,4 @@ async def check_and_process_giveaways(bot):
                 
             ga.status = "finished"
             
-        await session.commit() # Атомарный коммит всех созданных ордеров и балансов в базу
-
-def start_scheduler(bot):
-    """Запуск фонового планировщика внутри главного процесса asyncio."""
-    scheduler.add_job(check_and_process_giveaways, 'interval', minutes=1, args=[bot])
-    scheduler.start()
-    logger.info("⏰ Фоновый планировщик APScheduler успешно запущен!")
+        await session.commit()
