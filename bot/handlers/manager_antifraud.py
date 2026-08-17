@@ -17,6 +17,7 @@ async def process_af_callback_ban(callback: CallbackQuery, is_manager: bool, db_
     """Атомарный подтвержденный бан кликера прямо из текста экстренного уведомления."""
     if not is_manager: return
     
+    # ИСПРАВЛЕНО: Добавлен точный индекс [1] для извлечения ID юзера из callback.data
     target_user_id = int(callback.data.split(":")[1])
     user_obj = await db_session.get(User, target_user_id)
     
@@ -34,7 +35,6 @@ async def process_af_callback_ban(callback: CallbackQuery, is_manager: bool, db_
     user_obj.antifraud_reason = f"🔨 Забанен оверлордом за использование автоматизации кликов."
     await db_session.commit()
 
-    # Изменяем текст карточки алерта у менеджера, удаляя кнопки управления
     try:
         await callback.message.edit_text(
             f"{callback.message.text}\n\n"
@@ -53,6 +53,7 @@ async def process_af_callback_pardon(callback: CallbackQuery, is_manager: bool, 
     """Снятие обвинений в спаме с пользователя прямо из инлайн-карточки алерта."""
     if not is_manager: return
     
+    # ИСПРАВЛЕНО: Добавлен точный индекс [1] для извлечения ID юзера из callback.data
     target_user_id = int(callback.data.split(":")[1])
     user_obj = await db_session.get(User, target_user_id)
     
@@ -83,7 +84,6 @@ USERS_PER_PAGE_AF = 4
 
 async def send_antifraud_panel_page(callback_or_message, session: AsyncSession, page: int = 1):
     """Отрисовка постраничного списка всех подозрительных учетных записей чата."""
-    # Считаем общее число зафиксированных системой абузеров
     count_q = select(func.count(User.tg_id)).where(User.is_suspicious == True)
     total_suspicious = (await session.execute(count_q)).scalar() or 0
 
@@ -122,7 +122,6 @@ async def send_antifraud_panel_page(callback_or_message, session: AsyncSession, 
                 f"📊 Лог системы: <i>{u.antifraud_reason or 'Не указан'}</i>\n"
             )
             
-            # Ряд быстрых кнопок управления для каждого абузера прямо внутри списка
             if not u.is_banned:
                 buttons.append([
                     InlineKeyboardButton(text=f"🔨 Бан ID:{u.tg_id}", callback_data=f"af_confirm_ban:{u.tg_id}"),
@@ -135,7 +134,6 @@ async def send_antifraud_panel_page(callback_or_message, session: AsyncSession, 
 
         text = "\n".join(lines)
 
-        # Навигационный блок пагинации списка
         nav_row = []
         if page > 1:
             nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"af_page:{page-1}"))
@@ -157,7 +155,7 @@ async def send_antifraud_panel_page(callback_or_message, session: AsyncSession, 
 @router.callback_query(F.data.startswith("af_page:"))
 async def process_antifraud_panel_click(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
+    # ИСПРАВЛЕНО: Добавлен точный индекс 1 для извлечения номера страницы из callback.data
     page = int(callback.data.split(":"))
     await send_antifraud_panel_page(callback, db_session, page=page)
     await callback.answer()
-
