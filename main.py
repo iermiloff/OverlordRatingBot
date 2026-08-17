@@ -65,7 +65,9 @@ async def main():
     dp.callback_query.middleware(DbSessionMiddleware())
     dp.callback_query.middleware(AuthMiddleware())
 
-    # 4. Логгер активности чатов ставим в самый конец цепочки сообщений
+    from bot.middlewares.antifraud_math import AntiFraudMathMiddleware
+    dp.message.middleware(AntiFraudMathMiddleware())
+    
     dp.message.middleware(ActivityLogMiddleware())
 
     # 5. Подключаем единый собранный роутер со всеми хэндлерами
