@@ -45,7 +45,7 @@ async def check_and_process_giveaways(bot):
                 cond_text = f"1. 🎖️ Наличие титула от **'{t_name}'** и выше.\n" \
                             f"2. 🎟️ Наличие билета **'{ticket_name}'** в вашем инвентаре."
                 footer_text = f"📈 _Покупайте билеты в '🛍️ Магазин товаров'! Каждый билет пропорционально умножает ваши шансы в лотерейном барабане бота!_\n\n" \
-                              f"⚠️ **ВНИМАНИЕ:** Честная лотерея! В случае победы у счастливчика **сгорают ВСЕ билеты данного типа**, обнуляя его шансы для следующего раунда! У проигравших билеты сохраняются! 🎇"
+                              f"⚠️ **ВНИМАНИЕ:** В случае победы у счастливчика **сгорают ВСЕ билеты данного типа**, обнуляя его шансы для следующего раунда! У проигравших билеты сохраняются! 🎇"
 
             chats = (await session.execute(select(ChatConfig).where(ChatConfig.is_active == True))).scalars().all()
             
@@ -86,7 +86,7 @@ async def check_and_process_giveaways(bot):
                 users_q = select(User).where(and_(
                     User.lifetime_rating >= min_rating, 
                     User.is_banned == False,
-                    User.tg_id.not_in(settings.managers_list) # Исключаем админов
+                    User.tg_id.not_in(settings.managers_list)
                 ))
                 query_res = await session.execute(users_q)
                 eligible_records = [(u, 1) for u in query_res.scalars().all()]
@@ -96,7 +96,7 @@ async def check_and_process_giveaways(bot):
                     Inventory.item_id == ticket_id, 
                     Inventory.quantity >= 1, 
                     User.is_banned == False,
-                    User.tg_id.not_in(settings.managers_list) # Исключаем админов
+                    User.tg_id.not_in(settings.managers_list)
                 ))
                 eligible_records = (await session.execute(users_q)).all()
 
@@ -151,7 +151,6 @@ async def check_and_process_giveaways(bot):
                 qty_label = f" _(заявил {user_ticket_map[w.tg_id]} шт. билетов)_" if ticket_id > 0 else ""
                 mentions.append(f"👑 @{w.username or w.full_name}{qty_label}")
 
-            # Сжигаем ВСЕ билеты этого типа строго у ПОБЕДИТЕЛЕЙ. У проигравших всё остается на руках!
             if ticket_id > 0 and winner_ids:
                 burn_query = delete(Inventory).where(and_(
                     Inventory.item_id == ticket_id,
@@ -171,11 +170,17 @@ async def check_and_process_giveaways(bot):
                 f"Поздравляем счастливчиков! {footer_status_text}"
             )
             for chat in chats:
-                try: await bot.send_message(chat_id=text_results, chat_id_param=chat.id, text=text_results, parse_mode="Markdown")
-                except Exception: 
-                    try: await bot.send_message(chat_id=chat.id, text=text_results, parse_mode="Markdown")
-                    except Exception: pass
+                # ИСПРАВЛЕНО: Полностью зачищена опечатка с chat_id_param
+                try: await bot.send_message(chat_id=chat.id, text=text_results, parse_mode="Markdown")
+                except Exception: pass
                 
             ga.status = "finished"
             
         await session.commit()
+
+def start_scheduler(bot):
+    """Запуск фонового планировщика внутри главного процесса asyncio."""
+    scheduler.add_job(check_and_process_giveaways, 'interval', minutes=1, args=[bot])
+    scheduler.start()
+    logger.info("⏰ Фоновый планировщик APScheduler успешно запущен!")
+
