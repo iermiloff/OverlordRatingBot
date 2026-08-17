@@ -1,141 +1,163 @@
-from datetime import datetime, timedelta
+import logging
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 
+from config import settings
 from database.models import User
-from bot.keyboards.manager_antifraud_kb import get_antifraud_actions_keyboard
 
 router = Router(name="manager_antifraud_router")
+logger = logging.getLogger(__name__)
 
-SUSPECTS_PER_PAGE = 1
+# --- ОБРАБОТКА МГНОВЕННЫХ АЛЕРТОВ АНТИФРОДА (БАН / ПОМИЛОВАНИЕ) ---
 
-async def send_antifraud_page(message_or_query, session: AsyncSession, page: int = 1):
-    """Отрисовка карточек подозрительных пользователей с пагинацией."""
-    # Считаем количество активных подозреваемых
-    count_query = select(func.count(User.tg_id)).where(User.is_suspicious == True)
-    total_suspicious = (await session.execute(count_query)).scalar()
+@router.callback_query(F.data.startswith("af_confirm_ban:"))
+async def process_af_callback_ban(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    """Атомарный подтвержденный бан кликера прямо из текста экстренного уведомления."""
+    if not is_manager: return
+    
+    target_user_id = int(callback.data.split(":")[1])
+    user_obj = await db_session.get(User, target_user_id)
+    
+    if not user_obj:
+        await callback.answer("❌ Пользователь не найден в базе данных.", show_alert=True)
+        return
+        
+    if user_obj.is_banned:
+        await callback.answer("ℹ️ Этот аккаунт уже находится в черном списке.", show_alert=True)
+        return
+
+    # Включаем перманентную блокировку и сжигаем накопленную игровую валюту
+    user_obj.is_banned = True
+    user_obj.current_rating = 0
+    user_obj.antifraud_reason = f"🔨 Забанен оверлордом за использование автоматизации кликов."
+    await db_session.commit()
+
+    # Изменяем текст карточки алерта у менеджера, удаляя кнопки управления
+    try:
+        await callback.message.edit_text(
+            f"{callback.message.text}\n\n"
+            f"❌ <b>ВЕРДИКТ СИСТЕМЫ:</b> Нарушитель успешно заблокирован. "
+            f"Его текущий кошелек полностью обнулен, начисления заморожены.",
+            reply_markup=None,
+            parse_mode="HTML"
+        )
+    except Exception: pass
+    
+    await callback.answer("🔨 Нарушитель отправлен в перманентный бан!", show_alert=True)
+
+
+@router.callback_query(F.data.startswith("af_pardon:"))
+async def process_af_callback_pardon(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    """Снятие обвинений в спаме с пользователя прямо из инлайн-карточки алерта."""
+    if not is_manager: return
+    
+    target_user_id = int(callback.data.split(":")[1])
+    user_obj = await db_session.get(User, target_user_id)
+    
+    if not user_obj:
+        await callback.answer("❌ Пользователь не найден.", show_alert=True)
+        return
+
+    # Очищаем подозрительный статус
+    user_obj.is_suspicious = False
+    user_obj.antifraud_reason = None
+    await db_session.commit()
+
+    try:
+        await callback.message.edit_text(
+            f"{callback.message.text}\n\n"
+            f"✅ <b>ВЕРДИКТ СИСТЕМЫ:</b> Обвинения полностью сняты менеджером {callback.from_user.mention_html()}. "
+            f"Пользователь помилован и продолжает участие в игровой активности.",
+            reply_markup=None,
+            parse_mode="HTML"
+        )
+    except Exception: pass
+    
+    await callback.answer("✅ Метки подозрительности удалены, игрок помилован.", show_alert=True)
+
+# --- ПАНЕЛЬ РУЧНОГО МОНИТОРИНГА ВСЕХ ПОДОЗРИТЕЛЬНЫХ УЧАСТНИКОВ (CRM) ---
+
+USERS_PER_PAGE_AF = 4
+
+async def send_antifraud_panel_page(callback_or_message, session: AsyncSession, page: int = 1):
+    """Отрисовка постраничного списка всех подозрительных учетных записей чата."""
+    # Считаем общее число зафиксированных системой абузеров
+    count_q = select(func.count(User.tg_id)).where(User.is_suspicious == True)
+    total_suspicious = (await session.execute(count_q)).scalar() or 0
+
+    buttons = []
 
     if total_suspicious == 0:
-        text = "🔒 **Антифрод-система**\n\nПодозрительных аккаунтов не обнаружено. Все пользователи ведут себя естественно! 👍"
-        if isinstance(message_or_query, Message):
-            await message_or_query.answer(text, parse_mode="Markdown")
-        else:
-            await message_or_query.message.edit_text(text, parse_mode="Markdown")
-        return
-
-    offset_value = (page - 1) * SUSPECTS_PER_PAGE
-    query = (
-        select(User)
-        .where(User.is_suspicious == True)
-        .order_by(User.created_at.desc())
-        .limit(SUSPECTS_PER_PAGE)
-        .offset(offset_value)
-    )
-    result = await session.execute(query)
-    user = result.scalar_one_or_none()
-
-    # Корректировка страницы на случай, если запись обработали
-    if not user and page > 1:
-        await send_antifraud_page(message_or_query, session, page=page-1)
-        return
-
-    has_next = (page * SUSPECTS_PER_PAGE) < total_suspicious
-
-    username_text = f"@{user.username}" if user.username else "нет юзернейма"
-    
-    text = (
-        f"🔒 **Антифрод-контроль (Запись {page}/{total_suspicious})**\n\n"
-        f"👤 **Пользователь:** {user.full_name} ({username_text})\n"
-        f"🆔 **Telegram ID:** `{user.tg_id}`\n"
-        f"💳 **Текущий баланс:** {user.current_rating} рейтинга\n"
-        f"📈 **Опыт за все время:** {user.lifetime_rating} рейтинга\n\n"
-        f"🚨 **Обоснование системы подозрения:**\n"
-        f"_{user.antifraud_reason or 'Причина не указана'}_"
-    )
-
-    reply_markup = get_antifraud_actions_keyboard(user.tg_id, page, has_next)
-
-    if isinstance(message_or_query, Message):
-        await message_or_query.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
+        text = (
+            "🔒 **Инфраструктура математического Анти-фрода**\n\n"
+            "🟢 Система работает стабильно. Кликеры и макрос-боты в чатах не зафиксированы!\n\n"
+            "Все пользователи отправляют сообщения с хаотичными временными интервалами, "
+            "что полностью соответствует паттернам живого человека. Дисперсия в норме."
+        )
+        buttons.append([InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")])
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     else:
-        try:
-            await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception:
-            await message_or_query.answer()
+        offset_value = (page - 1) * USERS_PER_PAGE_AF
+        query = (
+            select(User)
+            .where(User.is_suspicious == True)
+            .order_by(User.created_at.desc())
+            .limit(USERS_PER_PAGE_AF)
+            .offset(offset_value)
+        )
+        suspicious_users = (await session.execute(query)).scalars().all()
+        has_next = (page * USERS_PER_PAGE_AF) < total_suspicious
+
+        lines = [f"🚨 **Картотека подозрительных профилей (Страница {page})**\n"]
+        lines.append("Ниже представлены аккаунты, у которых стандартное отклонение (σ) таймингов "
+                     "сообщений упало ниже нормы 3.5 сек. Изучите метрики:\n")
+
+        for u in suspicious_users:
+            status_tag = "🔨 ЗАБАНЕН" if u.is_banned else "⏳ НА ПРОВЕРКЕ"
+            lines.append(
+                f"👤 <b>Юзер:</b> @{u.username or u.tg_id} | {status_tag}\n"
+                f"🆔 ID: <code>{u.tg_id}</code>\n"
+                f"📊 Лог системы: <i>{u.antifraud_reason or 'Не указан'}</i>\n"
+            )
+            
+            # Ряд быстрых кнопок управления для каждого абузера прямо внутри списка
+            if not u.is_banned:
+                buttons.append([
+                    InlineKeyboardButton(text=f"🔨 Бан ID:{u.tg_id}", callback_data=f"af_confirm_ban:{u.tg_id}"),
+                    InlineKeyboardButton(text=f"✅ Помиловать ID:{u.tg_id}", callback_data=f"af_pardon:{u.tg_id}")
+                ])
+            else:
+                buttons.append([
+                    InlineKeyboardButton(text=f"✅ Снять пермабан ID:{u.tg_id}", callback_data=f"af_pardon:{u.tg_id}")
+                ])
+
+        text = "\n".join(lines)
+
+        # Навигационный блок пагинации списка
+        nav_row = []
+        if page > 1:
+            nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"af_page:{page-1}"))
+        if has_next:
+            nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"af_page:{page+1}"))
+        if nav_row:
+            buttons.append(nav_row)
+
+        buttons.append([InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")])
+        reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+
+    if isinstance(callback_or_message, CallbackQuery):
+        try: await callback_or_message.message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception: await callback_or_message.answer()
+    else:
+        await callback_or_message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
-@router.message(F.text == "🔒 Антифрод-система")
-@router.callback_query(F.data == "af_page:1") 
-async def cmd_manager_antifraud(message_or_query, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    
-    # Меняем message на message_or_query, чтобы функция умела работать и с сообщениями, и с колбэками
-    await send_antifraud_page(message_or_query, db_session, page=1)
-
-
-
-router.callback_query(F.data.startswith("af_page:"))
-async def process_af_page(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+@router.callback_query(F.data.startswith("af_page:"))
+async def process_antifraud_panel_click(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     page = int(callback.data.split(":"))
-    await send_antifraud_page(callback, db_session, page=page)
+    await send_antifraud_panel_page(callback, db_session, page=page)
     await callback.answer()
 
-
-@router.callback_query(F.data.startswith("af_act:"))
-async def process_antifraud_action(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    
-    # Парсим: ID юзера, тип действия, текущая страница
-    _, user_id, action, page = callback.data.split(":")
-    user_id, page = int(user_id), int(page)
-
-    user = await db_session.get(User, user_id)
-    if not user:
-        await callback.answer("❌ Пользователь не найден.", show_alert=True)
-        await send_antifraud_page(callback, db_session, page=1)
-        return
-
-    alert_msg = ""
-    
-    if action == "clear":
-        # Прощаем пользователя
-        user.is_suspicious = False
-        user.antifraud_reason = None
-        alert_msg = "✅ Подозрение снято. Пользователь оправдан."
-        
-    elif action == "strip":
-        # Списываем баланс, но оставляем метку подозрения активной для выбора дальнейших мер
-        user.current_rating = 0
-        alert_msg = "💎 Текущий баланс рейтинга полностью обнулен!"
-        try:
-            await callback.bot.send_message(chat_id=user.tg_id, text="⚠️ Менеджер обнулил ваш доступный баланс рейтинга за нарушение правил активности.")
-        except Exception: pass
-        
-    elif action == "ban_temp":
-        # Блокировка на 7 дней + убираем из списка подозреваемых
-        user.is_banned = True
-        user.ban_until = datetime.utcnow() + timedelta(days=7)
-        user.is_suspicious = False
-        alert_msg = "⏳ Аккаунт заблокирован в боте на 7 дней."
-        try:
-            await callback.bot.send_message(chat_id=user.tg_id, text="⛔ Ваш аккаунт временно заблокирован менеджером на 7 дней за подозрительную активность.")
-        except Exception: pass
-        
-    elif action == "ban_perm":
-        # Перманентный бан
-        user.is_banned = True
-        user.ban_until = None
-        user.is_suspicious = False
-        alert_msg = "⛔ Аккаунт заблокирован навсегда."
-        try:
-            await callback.bot.send_message(chat_id=user.tg_id, text="⛔ Ваш аккаунт заблокирован менеджером навсегда за грубое нарушение правил.")
-        except Exception: pass
-
-    await db_session.commit()
-    await callback.answer(alert_msg, show_alert=True)
-    
-    # Перерисовываем страницу анти-фрода
-    await send_antifraud_page(callback, db_session, page=page)
