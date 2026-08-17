@@ -34,6 +34,7 @@ async def check_and_process_giveaways(bot):
             else:
                 prize_currency = f"🎒 {ga.reward_value}"
 
+            # Адаптивно перестраиваем текст требований под выбранный админом режим
             if ticket_id == 0:
                 cond_text = f"1. 🎖️ Наличие титула от **'{t_name}'** и выше.\n" \
                             f"2. 🔓 Участие **БЕСПЛАТНОЕ**, лотерейные билеты не требуются!"
@@ -43,9 +44,8 @@ async def check_and_process_giveaways(bot):
                 ticket_name = ticket_item.name if ticket_item else "Удаленный билет"
                 cond_text = f"1. 🎖️ Наличие титула от **'{t_name}'** и выше.\n" \
                             f"2. 🎟️ Наличие билета **'{ticket_name}'** в вашем инвентаре."
-                # ИСПРАВЛЕНО: Честное и точное предупреждение для участников
                 footer_text = f"📈 _Покупайте билеты в '🛍️ Магазин товаров'! Каждый билет пропорционально умножает ваши шансы в лотерейном барабане бота!_\n\n" \
-                              f"⚠️ **ВНИМАНИЕ:** В случае победы у счастливчика **сгорают ВСЕ билеты данного типа**, обнуляя его шансы для следующего раунда! У проигравших билеты сохраняются! 🎇"
+                              f"⚠️ **ВНИМАНИЕ:** Честная лотерея! В случае победы у счастливчика **сгорают ВСЕ билеты данного типа**, обнуляя его шансы для следующего раунда! У проигравших билеты сохраняются! 🎇"
 
             chats = (await session.execute(select(ChatConfig).where(ChatConfig.is_active == True))).scalars().all()
             
@@ -81,13 +81,22 @@ async def check_and_process_giveaways(bot):
             else:
                 prize_currency = f"🎒 *{ga.reward_value}*"
 
+            # Адаптивная выборка участников из базы данных (СТРОГО БЕЗ МЕНЕДЖЕРОВ СИСТЕМЫ)
             if ticket_id == 0:
-                users_q = select(User).where(and_(User.lifetime_rating >= min_rating, User.is_banned == False))
+                users_q = select(User).where(and_(
+                    User.lifetime_rating >= min_rating, 
+                    User.is_banned == False,
+                    User.tg_id.not_in(settings.managers_list) # Исключаем админов
+                ))
                 query_res = await session.execute(users_q)
                 eligible_records = [(u, 1) for u in query_res.scalars().all()]
             else:
                 users_q = select(User, Inventory.quantity).join(Inventory, Inventory.user_id == User.tg_id).where(and_(
-                    User.lifetime_rating >= min_rating, Inventory.item_id == ticket_id, Inventory.quantity >= 1, User.is_banned == False
+                    User.lifetime_rating >= min_rating, 
+                    Inventory.item_id == ticket_id, 
+                    Inventory.quantity >= 1, 
+                    User.is_banned == False,
+                    User.tg_id.not_in(settings.managers_list) # Исключаем админов
                 ))
                 eligible_records = (await session.execute(users_q)).all()
 
@@ -142,7 +151,7 @@ async def check_and_process_giveaways(bot):
                 qty_label = f" _(заявил {user_ticket_map[w.tg_id]} шт. билетов)_" if ticket_id > 0 else ""
                 mentions.append(f"👑 @{w.username or w.full_name}{qty_label}")
 
-            # ИСПРАВЛЕНО: Сжигаем ВСЕ билеты этого типа строго у ПОБЕДИТЕЛЕЙ [INDEX: 0.1.7]. У проигравших всё остается на руках!
+            # Сжигаем ВСЕ билеты этого типа строго у ПОБЕДИТЕЛЕЙ. У проигравших всё остается на руках!
             if ticket_id > 0 and winner_ids:
                 burn_query = delete(Inventory).where(and_(
                     Inventory.item_id == ticket_id,
@@ -162,8 +171,10 @@ async def check_and_process_giveaways(bot):
                 f"Поздравляем счастливчиков! {footer_status_text}"
             )
             for chat in chats:
-                try: await bot.send_message(chat_id=chat.id, text=text_results, parse_mode="Markdown")
-                except Exception: pass
+                try: await bot.send_message(chat_id=text_results, chat_id_param=chat.id, text=text_results, parse_mode="Markdown")
+                except Exception: 
+                    try: await bot.send_message(chat_id=chat.id, text=text_results, parse_mode="Markdown")
+                    except Exception: pass
                 
             ga.status = "finished"
             
