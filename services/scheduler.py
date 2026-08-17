@@ -1,15 +1,66 @@
 import logging
 import random
-from datetime import datetime
+from datetime import datetime, timedelta
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, and_, delete
+from sqlalchemy import select, and_, delete, func
 
 from config import settings
 from database.connection import AsyncSessionLocal
-from database.models import Giveaway, User, ChatConfig, ShopItem, Inventory, Order, OrderStatus
+from database.models import Giveaway, User, ChatConfig, ShopItem, Inventory, Order, OrderStatus, ActivityLog
 
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
+
+async def send_daily_top_10(bot):
+    """Ежедневный воркер: собирает топ-10 активистов за последние 24 часа и шлет в чаты."""
+    now = datetime.utcnow()
+    one_day_ago = now - timedelta(days=1)
+    
+    async with AsyncSessionLocal() as session:
+        # Группируем логи активности за сутки, считаем сообщения живых пользователей
+        top_query = (
+            select(User, func.count(ActivityLog.id).label("msg_count"))
+            .join(ActivityLog, ActivityLog.user_id == User.tg_id)
+            .where(and_(
+                ActivityLog.created_at >= one_day_ago,
+                ActivityLog.message_length > 0,
+                User.is_banned == False,
+                User.tg_id.not_in(settings.managers_list) # Исключаем админов из топа
+            ))
+            .group_by(User.tg_id)
+            .order_by(func.count(ActivityLog.id).desc())
+            .limit(10)
+        )
+        
+        res = await session.execute(top_query)
+        records = res.all()
+        
+        if not records:
+            logger.info("📢 Ежедневный топ-10 пуст (нет активности за 24 часа). Рассылка отменена.")
+            return
+
+        lines = [
+            "🏆 **ЕЖЕДНЕВНАЯ ДОСКА ПОЧЕТА ЧАТА | ТОП-10 АКТИВИСТОВ** 🏆\n",
+            "Поздравляем наших самых разговорчивых участников за последние 24 часа! Ваши награды и ранги растут с каждым словом:\n"
+        ]
+        
+        medals = ["🥇", "🥈", "🥉", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣", "🔟"]
+        
+        for idx, (user_obj, msg_count) in enumerate(records):
+            medal = medals[idx] if idx < len(medals) else "👤"
+            username_label = f"@{user_obj.username}" if user_obj.username else user_obj.full_name
+            lines.append(f"{medal} {username_label} — **{msg_count}** сообщений")
+            
+        lines.append(f"\n💬 Общайтесь активнее, зарабатывайте {settings.CURRENCY_NAME} и забирайте призы в магазине! Новая доска почета — завтра в это же время! 🚀")
+        text_top = "\n".join(lines)
+        
+        # Публикуем доску почета во все привязанные группы
+        chats = (await session.execute(select(ChatConfig).where(ChatConfig.is_active == True))).scalars().all()
+        for chat in chats:
+            try: await bot.send_message(chat_id=chat.id, text=text_top, parse_mode="Markdown")
+            except Exception: pass
+            
+        logger.info("🏆 Ежедневная доска почета топ-10 успешно разослана по чатам!")
 
 async def check_and_process_giveaways(bot):
     """Каждоминутный фоновый воркер для проверки и автоматического проведения лотерей."""
@@ -63,7 +114,7 @@ async def check_and_process_giveaways(bot):
                 except Exception: pass
                 
             ga.status = "announced"
-        
+
         # 2. СЕКЦИЯ АВТО-ФИНАЛОВ
         finalize_q = select(Giveaway).where(and_(Giveaway.status == "announced", Giveaway.finalize_at <= now))
         to_finalize = (await session.execute(finalize_q)).scalars().all()
@@ -81,7 +132,6 @@ async def check_and_process_giveaways(bot):
             else:
                 prize_currency = f"🎒 *{ga.reward_value}*"
 
-            # Адаптивная выборка участников из базы данных (СТРОГО БЕЗ МЕНЕДЖЕРОВ СИСТЕМЫ)
             if ticket_id == 0:
                 users_q = select(User).where(and_(
                     User.lifetime_rating >= min_rating, 
@@ -170,7 +220,6 @@ async def check_and_process_giveaways(bot):
                 f"Поздравляем счастливчиков! {footer_status_text}"
             )
             for chat in chats:
-                # ИСПРАВЛЕНО: Полностью зачищена опечатка с chat_id_param
                 try: await bot.send_message(chat_id=chat.id, text=text_results, parse_mode="Markdown")
                 except Exception: pass
                 
@@ -180,7 +229,11 @@ async def check_and_process_giveaways(bot):
 
 def start_scheduler(bot):
     """Запуск фонового планировщика внутри главного процесса asyncio."""
+    # 1. Каждоминутный воркер проверки сетки розыгрышей (анонсы и финалы)
     scheduler.add_job(check_and_process_giveaways, 'interval', minutes=1, args=[bot])
+    
+    # 2. Ежедневный воркер публикации доски почета Топ-10 активистов (раз в 24 часа)
+    scheduler.add_job(send_daily_top_10, 'interval', hours=24, args=[bot])
+    
     scheduler.start()
-    logger.info("⏰ Фоновый планировщик APScheduler успешно запущен!")
-
+    logger.info("⏰ Фоновый планировщик APScheduler (Розыгрыши + Топ-10 за 24ч) успешно запущен!")
