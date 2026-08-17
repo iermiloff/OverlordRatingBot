@@ -37,7 +37,7 @@ class AntiFraudMathMiddleware(BaseMiddleware):
         if not db_session or not db_user:
             return await handler(event, data)
 
-        # Вытаскиваем временные метки последних сообщений пользователя из логов активности
+         # Вытаскиваем временные метки последних сообщений пользователя из логов активности
         logs_q = (
             select(ActivityLog.created_at)
             .where(and_(ActivityLog.user_id == user_id, ActivityLog.message_length > 0))
@@ -51,21 +51,20 @@ class AntiFraudMathMiddleware(BaseMiddleware):
         if len(timestamps) < MIN_MESSAGES_TO_ANALYZE:
             return await handler(event, data)
 
-        # Переводим объекты datetime в Unix-timestamp (секунды) и считаем интервалы
+        # Переводим объекты datetime в Unix-timestamp (секунды)
         unix_times = [t.timestamp() for t in timestamps]
         
-        # Считаем разницу между соседними сообщениями (интервалы отправки)
+        # Считаем разницу между соседними сообщениями (интервалы отправки в секундах)
         intervals = []
         for i in range(len(unix_times) - 1):
             intervals.append(abs(unix_times[i] - unix_times[i+1]))
 
-        # Вычисляем стандартное отклонение (Standard Deviation) числового массива интервалов
+        # Вычисляем стандартное отклонение (Standard Deviation) и среднее арифметическое
         sigma = float(np.std(intervals))
         mean_interval = float(np.mean(intervals))
 
         # АНАЛИЗ НА КЛИКЕР-БОТА
         if sigma < AF_THRESHOLD_SIGMA and mean_interval < 45.0:
-            # Юзер отправляет сообщения с одинаковыми интервалами! Защита срабатывает.
             if not db_user.is_suspicious:
                 db_user.is_suspicious = True
                 reason = f"🤖 Кликер-бот / Макрос (σ={round(sigma, 2)}с, средний интервал={round(mean_interval, 1)}с)"
@@ -88,7 +87,7 @@ class AntiFraudMathMiddleware(BaseMiddleware):
                 # Кнопка мгновенной блокировки из ЛС админа
                 af_kb = InlineKeyboardMarkup(inline_keyboard=[
                     [
-                        InlineKeyboardButton(text="🔨 Подтвердить Бан и Анулировать", callback_data=f"af_confirm_ban:{user_id}"),
+                        InlineKeyboardButton(text="🔨 Подтвердить Бан и Аннулировать", callback_data=f"af_confirm_ban:{user_id}"),
                         InlineKeyboardButton(text="✅ Ложная тревога / Помиловать", callback_data=f"af_pardon:{user_id}")
                     ]
                 ])
@@ -104,8 +103,9 @@ class AntiFraudMathMiddleware(BaseMiddleware):
                         )
                     except Exception: pass
 
-            # Блокируем начисление рейтинга за это сообщение абузера ( handler НЕ вызывается!)
+            # Блокируем начисление рейтинга за это сообщение абузера (handler НЕ вызывается!)
             return
 
         # Если всё в порядке — передаем управление дальше по цепочке
         return await handler(event, data)
+
