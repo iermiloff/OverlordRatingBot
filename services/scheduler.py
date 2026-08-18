@@ -7,7 +7,7 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select, and_
 
 from config import settings
-from database.connection import async_session_maker
+from database.connection import AsyncSessionLocal
 from database.models import (
     Giveaway, User, ChatConfig, 
     ShopItem, StockUnit, SystemSettings
