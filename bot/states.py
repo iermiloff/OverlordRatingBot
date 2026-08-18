@@ -52,3 +52,5 @@ class ManagerSettingsPromo(StatesGroup):
     waiting_for_invite_link = State()
     waiting_for_task_reward = State()
 
+class ManagerUserWalletEdit(StatesGroup):
+    waiting_for_balance_delta = State() 
