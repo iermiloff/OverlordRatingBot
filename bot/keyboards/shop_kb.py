@@ -22,7 +22,7 @@ def get_shop_item_keyboard(item_id: int, page: int, has_next: bool, price: int) 
     
     # Кнопка возврата в главное пользовательское меню (спасение от тупиков)
     buttons.append([
-        InlineKeyboardButton(text="↩️ Вернуться в главное меню", callback_data="main_menu_user")
+        InlineKeyboardButton(text="↩️ Вернуться в главное меню", callback_data="user_stats")
     ])
     
     return InlineKeyboardMarkup(inline_keyboard=buttons)
