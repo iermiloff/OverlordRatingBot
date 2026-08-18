@@ -139,26 +139,24 @@ async def process_user_item_view(callback: CallbackQuery, db_session: AsyncSessi
         await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
 
-# --- 💳 ТРАНЗАКЦИОННЫЙ ЗАПУСК ПОКУПКИ ---
 
 @router.callback_query(F.data.startswith("u_buy_start:"))
 async def process_user_buy_start(
-    callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext
+    callback: CallbackQuery, db_user: User, db_session: AsyncSession
 ):
-    """Атомарная проверка баланса и запуск транзакции оформления."""
+    """Моментальная фиксация сделки за миллисекунды без ожидания ввода адреса."""
     parts = callback.data.split(":")
     item_id = int(parts[1])
     page = int(parts[2])
     
     item = await db_session.get(ShopItem, item_id)
     if not item or item.is_deleted:
-        await callback.answer("❌ Товар больше недоступен!", show_alert=True)
+        await callback.answer("❌ Товар убран с витрины!", show_alert=True)
         return
         
-    # Проверка кошелька юзера
     if db_user.current_rating < item.price:
         await callback.answer(
-            f"❌ Недостаточно средств! У вас {db_user.current_rating} поинтов.", 
+            f"❌ Недостаточно поинтов! Стоимость: {item.price}.", 
             show_alert=True
         )
         return
@@ -173,33 +171,38 @@ async def process_user_buy_start(
         await callback.answer("❌ Увы! Этот товар только что раскупили!", show_alert=True)
         return
         
-    # Сохраняем мета-данные сделки в кэш FSM
-    await state.update_data(buy_item_id=item_id, buy_unit_id=unit.id, buy_page=page)
+    # АТОМАРНОЕ ЗАКРЕПЛЕНИЕ ЗА ЮЗЕРОМ: Списание и привязка поштучного ID
+    db_user.current_rating -= item.price
+    unit.status = "sold"
+    unit.owner_id = db_user.tg_id
+    unit.purchase_source = "tg"
     
     if unit.serial_or_promo:
-        # Режим А: Это цифровой ключ/промокод — оформляем мгновенно без адреса
-        await state.set_state(UserPurchaseSetup.waiting_for_confirm) # Переводим на финал
-        confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [
-                InlineKeyboardButton(text="✅ Подтвердить покупку", callback_data="u_buy_confirm_digital"),
-                InlineKeyboardButton(text="❌ Отмена", callback_data=f"u_item_view:{item_id}:{page}")
-            ]
-        ])
-        await callback.message.answer(
-            f"📦 **Оформление цифрового товара: {item.name}**\n\n"
-            f"С вашего баланса будет списано **{item.price}** поинтов. "
-            f"Вы мгновенно получите лицензионный ключ/промокод прямо в этот чат.",
-            reply_markup=confirm_kb
-        )
+        # Если админ загрузил цифровой ключ — он выдается сразу
+        promo_text = f"🔑 **Ваш цифровой ключ/промокод:**\n<code>{unit.serial_or_promo}</code>"
     else:
-        # Режим Б: Это физический мерч — запрашиваем данные доставки
-        await state.set_state(UserPurchaseSetup.waiting_for_delivery)
-        await callback.message.answer(
-            f"🎒 **Оформление физического мерча: {item.name}**\n\n"
-            f"Пожалуйста, введите **данные для доставки/связи** "
-            f"(ФИО, город, номер СДЭК/Почты или юзернейм для связи менеджеру):"
+        # Физический мерч или ручной ваучер уходит в инвентарь со статусом ожидания
+        unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]"
+        promo_text = (
+            "📦 **Товар успешно закреплен в вашем инвентаре!**\n\n"
+            "Вы можете оформить доставку или ввести реквизиты в любое удобное "
+            "время в меню '🎒 Мой Инвентарь / Награды'."
         )
+        
+    await db_session.commit()
+    
+    try: await callback.message.delete()
+    except Exception: pass
+    
+    await callback.message.answer(
+        f"🎉 **Покупка успешно завершена!**\n\n"
+        f"🎒 Вы приобрели: **{item.name}**\n"
+        f"💰 Списано: {item.price} поинтов.\n\n"
+        f"{promo_text}",
+        parse_mode="HTML"
+    )
     await callback.answer()
+
 
 # --- 🏁 ФИНАЛИЗАЦИЯ И ПОДТВЕРЖДЕНИЕ ПОКУПКИ ERP ---
 
@@ -275,13 +278,13 @@ async def process_user_buy_delivery_save(
     unit.purchase_source = "tg"
     
     # Записываем контакты прямо в серийное поле единицы для No-Code истории
-    unit.serial_or_promo = f"[ДОСТАВКА]: {delivery_text}"
+    unit.serial_or_promo = f"[ЗАЯВКА]: {delivery_text}"
     
     await db_session.commit()
     await state.clear()
     
     await message.answer(
-        f"🎉 **Заявка на мерч успешно оформлена!**\n\n"
+        f"🎉 **Заявка на товар успешно оформлена!**\n\n"
         f"🎒 Товар: **{item.name}**\n"
         f"💰 Списано: {item.price} поинтов.\n\n"
         f"Модераторы свяжутся с вами. Проверить статус "
