@@ -549,64 +549,62 @@ async def process_cc_user_open(
     
     win_reward = win_list[0]
         
-        if str(win_reward.reward_type) == "rating":
-            amount = int(win_reward.value)
-            db_user.current_rating += amount
-            db_user.lifetime_rating += amount
+    # Проверь, чтобы этот блок стоял ровно на одном вертикальном уровне внутри функции:
+    if str(win_reward.reward_type) == "rating":
+        amount = int(win_reward.value)
+        db_user.current_rating += amount
+        db_user.lifetime_rating += amount
+        await db_session.commit()
+        try: await callback.bot.send_message(chat_id=db_user.tg_id, text=f"💎 Вы выиграли: +{amount} поинтов!")
+        except Exception: pass
+    else:
+        # Находим карточку товара по названию на Складе ERP
+        item_q = select(ShopItem).where(
+            and_(ShopItem.name == win_reward.value, ShopItem.is_deleted == False)
+        ).limit(1)
+        shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
+        
+        unit = None
+        if shop_item:
+            # Ищем свободную поштучную единицу товара на Складе (статус stock)
+            unit_q = select(StockUnit).where(
+                and_(StockUnit.item_id == shop_item.id, StockUnit.status == "stock")
+            ).limit(1)
+            unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+            
+        if unit and shop_item:
+            # Бронируем единицу за юзером в статусе ожидания оформления
+            unit.status = "won"
+            unit.owner_id = db_user.tg_id
+            unit.purchase_source = "chest_custom"
+            unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]"
             await db_session.commit()
-            try: await callback.bot.send_message(chat_id=db_user.tg_id, text=f"💎 Вы выиграли: +{amount} поинтов!")
+            
+            try:
+                await callback.bot.send_message(
+                    chat_id=db_user.tg_id,
+                    text=f"🎉 **Вы выиграли: {shop_item.name}!**\n\n"
+                         f"🆔 ID предмета: `{unit.id}`.\n"
+                         f"📦 Перейдите в меню '🎒 Мой Инвентарь / Награды', чтобы ввести данные доставки.",
+                    parse_mode="Markdown"
+                )
             except Exception: pass
         else:
+            # ФОЛБЕК-КОМПЕНСАЦИЯ
+            fallback_coins = 75
+            db_user.current_rating += fallback_coins
+            db_user.lifetime_rating += fallback_coins
+            await db_session.commit()
+            try:
+                await callback.bot.send_message(
+                    chat_id=db_user.tg_id,
+                    text=f"🎁 Вы выиграли приз *{win_reward.value}*, но его не оказалось на Складе!\n"
+                         f"Вам начислен утешительный баланс: +{fallback_coins} поинтов!",
+                    parse_mode="Markdown"
+                )
+            except Exception: pass
 
-            item_q = select(ShopItem).where(
-                and_(ShopItem.name == win_reward.value, ShopItem.is_deleted == False)
-            ).limit(1)
-            shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
-            
-            unit = None
-            if shop_item:
-                # Ищем свободную поштучную единицу товара на Складе (статус stock)
-                unit_q = select(StockUnit).where(
-                    and_(StockUnit.item_id == shop_item.id, StockUnit.status == "stock")
-                ).limit(1)
-                unit = (await db_session.execute(unit_q)).scalar_one_or_none()
-                
-            if unit and shop_item:
-                # Товар есть на складе: атомарно бронируем за юзером в статусе ожидания оформления
-                unit.status = "won"
-                unit.owner_id = db_user.tg_id
-                unit.purchase_source = "chest_custom"
-                
-                # Юзер сам введет СДЭК или кошелек TON в своем Инвентаре без рисков скама
-                unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]"
-                await db_session.commit()
-                
-                try:
-                    await callback.bot.send_message(
-                        chat_id=db_user.tg_id,
-                        text=f"🎉 **Поздравляем! Вы открыли кастомный сундук и выиграли: {shop_item.name}!**\n\n"
-                             f"🆔 Уникальный ID предмета: `{unit.id}`.\n"
-                             f"📦 Товар забронирован за вами. Чтобы ввести данные для доставки "
-                             f"или реквизиты кошелька, перейдите в меню '🎒 Мой Инвентарь / Награды'.",
-                        parse_mode="Markdown"
-                    )
-                except Exception: pass
-            else:
-                # ФОЛБЕК-КОМПЕНСАЦИЯ: Если админ разыграл мерч, которого физически нет на Складе
-                fallback_coins = 75
-                db_user.current_rating += fallback_coins
-                db_user.lifetime_rating += fallback_coins
-                await db_session.commit()
-                try:
-                    await callback.bot.send_message(
-                        chat_id=db_user.tg_id,
-                        text=f"🎁 Вы выиграли приз *{win_reward.value}*, но его не оказалось на Складе!\n"
-                             f"Вам начислен автоматический утешительный баланс: +{fallback_coins} поинтов!",
-                        parse_mode="Markdown"
-                    )
-                except Exception: pass
-
-        await callback.answer()
+    await callback.answer()
 
 
 @router.callback_query(F.data == "cc_cancel")
