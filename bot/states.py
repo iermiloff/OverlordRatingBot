@@ -50,3 +50,5 @@ class ManagerSettingsPromo(StatesGroup):
     waiting_for_channel_id = State()
     waiting_for_channel_name = State()
     waiting_for_invite_link = State()
+    waiting_for_task_reward = State()
+
