@@ -94,12 +94,17 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
 async def process_user_inventory_view_click(
     callback: CallbackQuery, db_session: AsyncSession
 ):
-    """Просмотр предмета из инвентаря с возможностью безопасного No-Code оформления."""
+    """Просмотр предмета из инвентаря с жадной загрузкой связей товара."""
     parts = callback.data.split(":")
     unit_id = int(parts[1])
     page = int(parts[2])
+
+    unit_q = select(StockUnit).options(
+        joinedload(StockUnit.item)
+    ).where(StockUnit.id == unit_id)
     
-    unit = await db_session.get(StockUnit, unit_id)
+    unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+    
     if not unit or unit.status not in ["sold", "won"]:
         await callback.answer("❌ Предмет не найден!", show_alert=True)
         return
