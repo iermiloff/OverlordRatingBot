@@ -12,7 +12,6 @@ from bot.states import ManagerShopItemSetup # Убедись, что класс 
 router = Router(name="manager_shop_inventory_router")
 logger = logging.getLogger(__name__)
 
-# --- 📦 ГЛАВНОЕ МЕНЮ: СКЛАД ВИТРИНА ---
 
 @router.callback_query(F.data == "mg_shop_back")
 @router.callback_query(F.data.startswith("mg_stock_page:"))
@@ -186,29 +185,31 @@ async def process_item_price_input(message: Message, state: FSMContext):
     
     plat_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🌐 Все платформы", callback_data="mg_plat_set:all"),
+            InlineKeyboardButton(text="🗺️ Все платформы", callback_data="mg_plat_set:all"),
             InlineKeyboardButton(text="📱 Telegram", callback_data="mg_plat_set:tg"),
-            InlineKeyboardButton(text="💬 Discord", callback_data="mg_plat_set:discord")
+            InlineKeyboardButton(text="🎮 Discord", callback_data="mg_plat_set:discord")
         ]
     ])
-    await message.answer("🌐 **Шаг 4/5:** Выберите **Целевую платформу** для продаж товара:", reply_markup=plat_kb)
-
-# --- 🖼️ ФИНАЛ СОЗДАНИЯ И НОВАЯ МЕХАНИКА СКЛАДА ERP ---
+    await message.answer(
+        "🎁 **Шаг 4/5:** Выберите **Целевую платформу** для продаж товара:", 
+        reply_markup=plat_kb
+    )
 
 @router.callback_query(
     ManagerShopItemSetup.waiting_for_platform, 
     F.data.startswith("mg_plat_set:")
 )
 async def process_item_platform_input(callback: CallbackQuery, state: FSMContext):
-    plat = callback.data.split(":")
-    await state.update_data(item_plat=plat)
+    # ✅ СТРОГО ИСПРАВЛЕНО: Извлекаем чистую строку по индексу [1] вместо списка целиком
+    plat_str = callback.data.split(":")[1]
+    await state.update_data(item_plat=plat_str)
     await state.set_state(ManagerShopItemSetup.waiting_for_image)
     
     sk_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏩ Пропустить фото", callback_data="mg_skip_photo")]
     ])
     await callback.message.edit_text(
-        "🖼️ **Шаг 5/5:** Отправьте **Фотографию товара**.\n"
+        "🎁 **Шаг 5/5:** Отправьте **Фотографию товара**.\n"
         "Или нажмите кнопку ниже, чтобы оставить товар без фото:",
         reply_markup=sk_kb
     )
@@ -216,15 +217,15 @@ async def process_item_platform_input(callback: CallbackQuery, state: FSMContext
 
 async def save_shop_item_to_db(state: FSMContext, session: AsyncSession, img_id: str = None):
     data = await state.get_data()
-    # Авто-детект лотерейного билета по ключевым словам в имени
     name = data.get("item_name")
     is_t = "билет" in name.lower() or "лотерея" in name.lower()
     
+    # ✅ СТРОГО СИНХРОНИЗИРОВАНО: Записываем чистую строку платформы из FSM
     new_item = ShopItem(
         name=name,
         description=data.get("item_desc"),
         price=data.get("item_price"),
-        platform_target=data.get("item_plat"),
+        platform_target=data.get("item_plat"), # Сюда теперь прилетит "tg" или "discord"
         is_ticket=is_t,
         image_url=img_id
     )
@@ -244,7 +245,6 @@ async def process_item_skip_photo(callback: CallbackQuery, state: FSMContext, db
     await callback.message.answer("✅ Карточка товара создана (без фото)!")
     await callback.answer()
 
-# --- 📥 ЗАПРАВКА СЕРИЙНИКОВ/МЕРЧА НА СКЛАД (FSM) ---
 
 @router.callback_query(F.data.startswith("mg_stock_load:"))
 async def process_mg_stock_load_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
