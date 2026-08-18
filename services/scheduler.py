@@ -161,7 +161,7 @@ async def check_and_process_giveaways(bot):
                 
             ga.status = "announced"
         
-        # 2. СЕКЦИЯ АВТО-ФИНАЛОВ
+          # 2. СЕКЦИЯ АВТО-ФИНАЛОВ
         finalize_q = select(Giveaway).where(
             and_(Giveaway.status == "announced", Giveaway.finalize_at <= now)
         )
@@ -230,9 +230,11 @@ async def check_and_process_giveaways(bot):
 
             for w in winners:
                 if is_rating_prize:
+                    # Начисление чистой валюты рейтинга на балансы
                     w.current_rating += int(ga.reward_value)
                     w.lifetime_rating += int(ga.reward_value)
                 else:
+                    # Создание тикета на выдачу мерча в админку
                     new_order = Order(
                         user_id=w.tg_id, source="giveaway", 
                         item_name=f"[РОЗЫГРЫШ] {ga.reward_value}", 
@@ -289,17 +291,15 @@ async def check_and_process_giveaways(bot):
                     )
                 except Exception: pass
                 
+            # Важно: переводим статус в finished, чтобы закрыть цикл
             ga.status = "finished"
             
         await session.commit()
 
 def start_scheduler(bot):
     """Запуск фонового планировщика внутри главного процесса asyncio."""
-    # Регистрируем оба интервальных ежеминутных воркера
     scheduler.add_job(check_and_process_giveaways, 'interval', minutes=1, args=[bot])
     scheduler.add_job(check_and_send_random_chests, 'interval', minutes=1, args=[bot])
     
     scheduler.start()
     logger.info("⏰ Фоновый планировщик успешно запущен в работу!")
-
-
