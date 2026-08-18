@@ -258,48 +258,145 @@ async def process_item_skip_photo(callback: CallbackQuery, state: FSMContext, db
 
 
 @router.callback_query(F.data.startswith("mg_stock_load:"))
-async def process_mg_stock_load_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
+async def process_mg_stock_load_start(callback: CallbackQuery, is_manager: bool, state: FSMContext, db_session: AsyncSession):
     if not is_manager: return
     parts = callback.data.split(":")
-    # ✅ СТРОГО ИСПРАВЛЕНО: Добавлены индексы для извлечения строк из списка сплита
     item_id = int(parts[1])
     page = int(parts[2])
     
-    await state.update_data(load_item_id=item_id, load_page=page)
-    from bot.states import ManagerStockLoad
+    # Атомарно проверяем, какие юниты ОПРИХОДОВАНЫ у этого товара ранее
+    check_q = select(StockUnit).where(StockUnit.item_id == item_id).limit(5)
+    existing_units = (await db_session.execute(check_q)).scalars().all()
+    
+    # Определяем текущий No-Code профиль склада для этой карточки
+    has_promos = any(u.serial_or_promo is not None for u in existing_units)
+    has_merch = any(u.serial_or_promo is None for u in existing_units) if existing_units else False
+    
+    forced_mode = "any"
+    if has_promos and not has_merch:
+        forced_mode = "digital"
+        prompt = (
+            "ℹ️ **Профиль товара: ЦИФРОВОЙ КЛЮЧ / ПРОМОКОД**\n"
+            "На складе уже хранятся лицензионные ключи для этой позиции.\n\n"
+            "👇 **Подсказка по вводу:**\n"
+            "• Пришлите **один код** одной строкой (напр. `STEAM-XXXX`).\n"
+            "• Либо пришлите **список кодов**, где каждый новый промокод написан **с новой строки**."
+        )
+    elif has_merch and not has_promos:
+        forced_mode = "physical"
+        prompt = (
+            "ℹ️ **Профиль товара: ФИЗИЧЕСКИЙ МЕРЧ / РУЧНОЙ ВАУЧЕР**\n"
+            "Этот товар ведётся как штучный мерч без кодов.\n\n"
+            "👇 **Подсказка по вводу:**\n"
+            "• Введите **целое число штук**, которое хотите оприходовать на склад (напр. `15`)."
+        )
+    else:
+        prompt = (
+            "📦 **Склад пуст. Выберите формат заправки:**\n\n"
+            "• Чтобы заправить **Физический мерч**, введите число штук (напр. `10`).\n"
+            "• Чтобы заправить **Цифровые промокоды**, пришлите ключ текстом. "
+            "Если кодов много — пишите каждый код с новой строки."
+        )
+
+    await state.update_data(load_item_id=item_id, load_page=page, stock_forced_mode=forced_mode)
     await state.set_state(ManagerStockLoad.waiting_for_units)
     
     await callback.message.answer(
-        "📦 **Поштучная заправка Склада [ERP]**\n\n"
-        "Отправьте количество штук для мерча (целое число).\n"
-        "Либо пришлите **список промокодов/ключей** (каждый код с новой строки):"
+        f"📋 **Поштучная заправка Склада [ERP]**\n\n{prompt}"
     )
     await callback.answer()
+
 
 @router.message(ManagerStockLoad.waiting_for_units)
 async def process_mg_stock_load_save(message: Message, state: FSMContext, db_session: AsyncSession):
     data = await state.get_data()
     item_id = data.get("load_item_id")
     page = data.get("load_page")
-    text = message.text.strip()
+    forced_mode = data.get("stock_forced_mode", "any")
+    raw_text = message.text.strip()
     
-    added_count = 0
-    if text.isdigit():
-        for _ in range(int(text)):
+    # Проверка ограничений профиля товара
+    if forced_mode == "digital" and raw_text.isdigit():
+        await message.answer(
+            "❌ **Ошибка профиля!** Этот товар ведётся как цифровой промокод.\n"
+            "Система ожидает текст ключа (или список кодов построчно), а не число штук. Пожалуйста, введите промокод(ы):"
+        )
+        return
+        
+    if forced_mode == "physical" and not raw_text.isdigit():
+        await message.answer(
+            "❌ **Ошибка профиля!** Этот товар ведётся как физический мерч.\n"
+            "Система ожидает целое число штук для добавления на склад. Пожалуйста, введите число:"
+        )
+        return
+
+    # ВЕТКА 1: Оприходование физического мерча
+    if raw_text.isdigit():
+        count = int(raw_text)
+        for _ in range(count):
             unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=None)
             db_session.add(unit)
-            added_count += 1
-    else:
-        codes = [c.strip() for c in text.split("\n") if c.strip()]
-        for code in codes:
-            unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=code)
-            db_session.add(unit)
-            added_count += 1
             
+        await db_session.commit()
+        await state.clear() # Для мерча конвейер не нужен, они заливаются пачкой
+        
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📦 Вернуться на Склад", callback_data=f"mg_stock_page:{page}")]
+        ])
+        await message.answer(f"✅ Успешно добавлено на Склад: **{count}** шт. мерча!", reply_markup=back_kb)
+        return
+
+    # ВЕТКА 2: Оприходование цифровых промокодов
+    codes = [c.strip() for c in raw_text.split("\n") if c.strip()]
+    for code in codes:
+        unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=code)
+        db_session.add(unit)
+        
     await db_session.commit()
-    await state.clear()
     
-    await message.answer(f"✅ Успешно оприходовано на Склад: **{added_count}** единиц товара!")
+    # 🔄 НАСТОЯЩИЙ ПОШАГОВЫЙ КОНВЕЙЕР "ИДЕМ ДАЛЬШЕ / ХВАТИТ"
+    # Мы НЕ стираем стейт сессии, а выводим пульт управления циклом!
+    loop_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="📥 Добавить ещё коды", callback_data=f"mg_stock_loop_more:{item_id}:{page}"),
+            InlineKeyboardButton(text="🛑 Хватит, закончить", callback_data=f"mg_stock_loop_stop:{page}")
+        ]
+    ])
+    
+    await message.answer(
+        f"📥 **Партия успешно обработана!**\n"
+        f"Добавлено лицензионных ключей в этой сессии: **{len(codes)}** шт.\n\n"
+        f"👇 Что делаем дальше?",
+        reply_markup=loop_kb
+    )
+
+
+@router.callback_query(F.data.startswith("mg_stock_loop_more:"))
+async def process_mg_stock_loop_more(callback: CallbackQuery, is_manager: bool):
+    """Позволяет остаться в стейте ввода и прислать следующую строку промокода."""
+    if not is_manager: return
+    await callback.message.edit_text(
+        "📝 **Конвейер активен.** Отправьте следующую строку с промокодом "
+        "(или пачку кодов, каждый с новой строки):"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mg_stock_loop_stop:"))
+async def process_mg_stock_loop_stop(callback: CallbackQuery, is_manager: bool, state: FSMContext):
+    """Окончательный выход из конвейера заправки ключей с очисткой FSM."""
+    if not is_manager: return
+    page = int(callback.data.split(":")[2])
+    await state.clear() # Жестко чистим память FSM только при выходе
+    
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Вернуться на Склад", callback_data=f"mg_stock_page:{page}")]
+    ])
+    await callback.message.edit_text(
+        "✅ **Заправка склада успешно завершена!**\nВсе коды зафиксированы в базе данных.",
+        reply_markup=back_kb
+    )
+    await callback.answer()
 
 # --- АТОМАРНЫЙ ПЕРЕНОС ТОВАРОВ НА ВИТРИНУ ПУБЛИЧНЫХ ПРОДАЖ ---
 
