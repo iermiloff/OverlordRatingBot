@@ -1,33 +1,37 @@
 import logging
 import random
+from datetime import datetime
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery, 
+    InlineKeyboardMarkup, InlineKeyboardButton
+)
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, delete
 
 from config import settings
-from database.models import User, Order, OrderStatus
-from database.connection import AsyncSessionLocal
-from bot.states import ManagerCustomChestSetup, ManagerCustomRewardSetup
-
-# ✅ СТРОГО НОВЫЕ МОДЕЛИ БЕТА/RC-ВЕТКИ (замени на свои, если у тебя другие имена таблиц)
+from database.models import User, Order, OrderStatus, ChatConfig
+from bot.states import (
+    ManagerCustomChestSetup, 
+    ManagerCustomRewardSetup
+)
 from database.models import CustomChest, CustomChestReward
 
 router = Router(name="manager_custom_chests_router")
 logger = logging.getLogger(__name__)
 
-# Кэш-блокировщик в памяти процесса для защиты от Race Condition кликов
 opened_custom_chests_cache = set()
 
 # --- 📋 ГЛАВНОЕ МЕНЮ И ПАГИНАЦИЯ ---
 
 @router.callback_query(F.data == "cc_main_menu")
 @router.callback_query(F.data.startswith("cc_list_page:"))
-async def cmd_custom_chests_main(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+async def cmd_custom_chests_main(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
     if not is_manager: return
     
-    # Вычисляем страницу пагинации
     page = 1
     if callback.data.startswith("cc_list_page:"):
         page = int(callback.data.split(":")[1])
@@ -35,51 +39,76 @@ async def cmd_custom_chests_main(callback: CallbackQuery, is_manager: bool, db_s
     limit = 4
     offset = (page - 1) * limit
     
-    # Считаем общее число сундуков
     count_q = select(func.count(CustomChest.id))
     total = (await db_session.execute(count_q)).scalar() or 0
     
-    # Загружаем сундуки для текущей страницы
-    chests_q = select(CustomChest).order_by(CustomChest.created_at.desc()).limit(limit).offset(offset)
+    chests_q = select(CustomChest).order_by(
+        CustomChest.created_at.desc()
+    ).limit(limit).offset(offset)
     chests = (await db_session.execute(chests_q)).scalars().all()
     
     text = (
         "🧰 **Управление Кастомными Сундуками**\n\n"
-        "Здесь вы можете создавать полностью независимые сундуки для ручного сброса в чаты. "
-        "Каждый сундук имеет свой текст, картинку и призовой пул наград.\n\n"
-        f" Всего создано шаблонов: **{total}** шт."
+        "Здесь вы можете создавать сундуки для ручного сброса.\n\n"
+        f"Всего создано шаблонов: **{total}** шт."
     )
     
     buttons = []
-    
-    # Выводим сундуки кнопками
     for cc in chests:
-        buttons.append([InlineKeyboardButton(text=f"📦 {cc.name}", callback_data=f"cc_manage:{cc.id}")])
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📦 {cc.name}", callback_data=f"cc_manage:{cc.id}"
+            )
+        ])
         
-    # Стрелки навигации
     nav_row = []
     if page > 1:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"cc_list_page:{page-1}"))
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ Назад", callback_data=f"cc_list_page:{page-1}"
+            )
+        )
     if page * limit < total:
-        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"cc_list_page:{page+1}"))
+        nav_row.append(
+            InlineKeyboardButton(
+                text="Вперед ➡️", callback_data=f"cc_list_page:{page+1}"
+            )
+        )
     if nav_row:
         buttons.append(nav_row)
         
-    # Управляющие кнопки корня
-    buttons.append([InlineKeyboardButton(text="➕ Создать кастомный сундук", callback_data="cc_create_start")])
-    buttons.append([InlineKeyboardButton(text="↩️ Назад в меню админки", callback_data="main_menu_manager")])
+    buttons.append([
+        InlineKeyboardButton(
+            text="➕ Создать сундук", callback_data="cc_create_start"
+        )
+    ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="↩️ Меню админки", callback_data="main_menu_manager"
+        )
+    ])
     
-    await callback.message.delete() # Зачищаем старое медиа перед выводом текста
-    await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+    try: await callback.message.delete()
+    except Exception: pass
+    
+    await callback.message.answer(
+        text, 
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), 
+        parse_mode="Markdown"
+    )
     await callback.answer()
 
-# --- ➕ FSM-КОНСТРУКТОР СОЗДАНИЯ СУНДУКА ---
+# --- ➕ FSM-КОНСТРУКТОР СУНДУКА ---
 
 @router.callback_query(F.data == "cc_create_start")
-async def process_cc_create_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
+async def process_cc_create_start(
+    callback: CallbackQuery, is_manager: bool, state: FSMContext
+):
     if not is_manager: return
     await state.set_state(ManagerCustomChestSetup.waiting_for_name)
-    await callback.message.answer("📝 **Шаг 1/3:** Введите короткое **Название сундука** (для меню админки):")
+    await callback.message.answer(
+        "📝 **Шаг 1/3:** Введите **Название сундука** для админки:"
+    )
     await callback.answer()
 
 @router.message(ManagerCustomChestSetup.waiting_for_name)
@@ -87,9 +116,7 @@ async def process_cc_name(message: Message, state: FSMContext):
     await state.update_data(cc_name=message.text.strip())
     await state.set_state(ManagerCustomChestSetup.waiting_for_description)
     await message.answer(
-        "📝 **Шаг 2/3:** Введите **Описание/Анонс**.\n\n"
-        "Этот текст бот опубликует в чате группы при сбросе сундука. "
-        "Используйте Markdown для красоты:"
+        "📝 **Шаг 2/3:** Введите **Описание/Анонс** для чата группы:"
     )
 
 @router.message(ManagerCustomChestSetup.waiting_for_description)
@@ -98,15 +125,19 @@ async def process_cc_desc(message: Message, state: FSMContext):
     await state.set_state(ManagerCustomChestSetup.waiting_for_media)
     
     skip_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏩ Пропустить медиа (только текст)", callback_data="cc_skip_media")]
+        [
+            InlineKeyboardButton(
+                text="⏩ Пропустить медиа (только текст)", 
+                callback_data="cc_skip_media"
+            )
+        ]
     ])
     await message.answer(
-        "🖼️ **Шаг 3/3:** Отправьте **Фотографию или GIF-анимацию** для карточки сундука.\n\n"
-        "Или нажмите кнопку ниже, чтобы оставить только текстовый анонс:",
+        "🖼️ **Шаг 3/3:** Отправьте **Фотографию или GIF** для карточки:",
         reply_markup=skip_kb
     )
 
-# Вставляем строго под методом process_cc_desc:
+# --- 🖼️ УНИВЕРСАЛЬНЫЙ СБОР МЕДИА И СОХРАНЕНИЕ ---
 
 @router.message(
     ManagerCustomChestSetup.waiting_for_media, 
@@ -115,32 +146,21 @@ async def process_cc_desc(message: Message, state: FSMContext):
 async def process_cc_media(
     message: Message, state: FSMContext, db_session: AsyncSession
 ):
-    """Прием Фото/GIF на Шаге 3/3 и автоматический переход к наградам."""
     media_id = None
-    
-    # 1. Проверяем, если прислали обычное фото
     if message.photo:
         media_id = message.photo[-1].file_id
-    # 2. Проверяем, если прислали нативную анимацию
     elif message.animation:
         media_id = message.animation.file_id
-    # 3. Проверяем, если GIF пришла как документ
     elif message.document:
         mime = message.document.mime_type
         if mime and (mime.startswith("image/") or mime.startswith("video/")):
             media_id = message.document.file_id
             
     if not media_id:
-        await message.answer(
-            "❌ **Неподдерживаемый формат медиа!**\n"
-            "Пожалуйста, отправьте картинку как фото или GIF-анимацию:"
-        )
+        await message.answer("❌ Отправьте картинку или GIF-анимацию:")
         return
 
-    # Извлекаем текстовые параметры сундука из FSM памяти
     data = await state.get_data()
-    
-    # Атомарно сохраняем кастомный сундук в PostgreSQL
     new_chest = CustomChest(
         name=data.get("cc_name"),
         description=data.get("cc_desc"),
@@ -148,8 +168,6 @@ async def process_cc_media(
     )
     db_session.add(new_chest)
     await db_session.commit()
-    
-    # Запускаем пошаговый цикл настройки призового пула наград
     await start_reward_setup_loop(message, state, new_chest.id)
 
 @router.callback_query(
@@ -159,10 +177,7 @@ async def process_cc_media(
 async def process_cc_skip_media(
     callback: CallbackQuery, state: FSMContext, db_session: AsyncSession
 ):
-    """Обработка кнопки пропуска медиа на Шаге 3/3."""
     data = await state.get_data()
-    
-    # Создаем сундук без картинки (media_url=None)
     new_chest = CustomChest(
         name=data.get("cc_name"),
         description=data.get("cc_desc"),
@@ -170,27 +185,31 @@ async def process_cc_skip_media(
     )
     db_session.add(new_chest)
     await db_session.commit()
-    
-    # Запускаем пошаговую настройку наград
     await start_reward_setup_loop(callback.message, state, new_chest.id)
     await callback.answer()
 
-
-# --- ➕ ЦИКЛИЧЕСКОЕ ДОБАВЛЕНИЕ НАГРАД (FSM) ---
+# --- ➕ АВТОНОМНЫЙ ЦИКЛ НАГРАД (FSM БЕЗ ИМПОРТОВ) ---
 
 async def start_reward_setup_loop(msg: Message, state: FSMContext, chest_id: int):
     await state.clear()
     await state.update_data(cc_id=chest_id)
     await state.set_state(ManagerCustomRewardSetup.waiting_for_type)
     
-    from bot.keyboards.manager_activities_kb import (
-        get_custom_reward_type_keyboard
-    )
+    custom_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="💎 Валюта рейтинга", callback_data="cc_reward_type:rating"
+            ),
+            InlineKeyboardButton(
+                text="🎒 Физический мерч", callback_data="cc_reward_type:item"
+            )
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cc_cancel")]
+    ])
     await msg.answer(
-        f"🎉 **Шаблон сундука сохранен!**\n\n"
-        f"Давайте наполним его призовой пул.\n"
-        f"**[Шаг 1/3]** Выберите тип награды:",
-        reply_markup=get_custom_reward_type_keyboard()
+        "🎉 **Шаблон сундука сохранен!**\n\n"
+        "**[Шаг 1/3]** Выберите тип награды:",
+        reply_markup=custom_kb
     )
 
 @router.callback_query(
@@ -198,18 +217,17 @@ async def start_reward_setup_loop(msg: Message, state: FSMContext, chest_id: int
     F.data.startswith("cc_reward_type:")
 )
 async def process_cc_reward_type(callback: CallbackQuery, state: FSMContext):
-    r_type = callback.data.split(":")
+    r_type = callback.data.split(":")[1]
     await state.update_data(r_type=r_type)
     await state.set_state(ManagerCustomRewardSetup.waiting_for_value)
     
     p = (
         f"Введите **количество {settings.CURRENCY_NAME}**:"
         if r_type == "rating" else
-        "Введите **название мерча** (напр. _Кепка_):"
+        "Введите **название мерча** (напр. _Худи с логотипом_):"
     )
     await callback.message.edit_text(
-        f"🎁 **Настройка награды [Шаг 2/3]**\n\n{p}", 
-        parse_mode="Markdown"
+        f"🎁 **Настройка награды [Шаг 2/3]**\n\n{p}", parse_mode="Markdown"
     )
     await callback.answer()
 
@@ -224,7 +242,7 @@ async def process_cc_reward_value(message: Message, state: FSMContext):
     await state.set_state(ManagerCustomRewardSetup.waiting_for_weight)
     await message.answer(
         "🎁 **Настройка награды [Шаг 3/3]**\n\n"
-        "Укажите **вес выпадения** (напр. `1.0` или `0.2`):"
+        "Укажите **вес выпадения** (например, `1.0` или `0.2`):"
     )
 
 @router.message(ManagerCustomRewardSetup.waiting_for_weight)
@@ -244,7 +262,7 @@ async def process_cc_reward_weight(
     
     new_reward = CustomChestReward(
         chest_id=chest_id,
-        reward_type=data.get("r_type"),
+        reward_type=str(data.get("r_type")),
         value=data.get("r_val"),
         weight=weight
     )
@@ -254,20 +272,14 @@ async def process_cc_reward_weight(
     await state.set_state(ManagerCustomRewardSetup.waiting_for_next_decision)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="➕ Еще награду", 
-                                 callback_data="cc_loop_more"),
-            InlineKeyboardButton(text="🛑 Зафиксировать пул", 
-                                 callback_data="cc_loop_stop")
+            InlineKeyboardButton(text="➕ Еще награду", callback_data="cc_loop_more"),
+            InlineKeyboardButton(text="🛑 Зафиксировать пул", callback_data="cc_loop_stop")
         ]
     ])
-    await message.answer(
-        "✅ Награда добавлена! Внести в этот сундук что-то еще?", 
-        reply_markup=kb
-    )
+    await message.answer("✅ Награда добавлена! Внести в сундук что-то еще?", reply_markup=kb)
 
 @router.callback_query(
-    ManagerCustomRewardSetup.waiting_for_next_decision, 
-    F.data == "cc_loop_more"
+    ManagerCustomRewardSetup.waiting_for_next_decision, F.data == "cc_loop_more"
 )
 async def process_cc_loop_more(callback: CallbackQuery, state: FSMContext):
     data = await state.get_data()
@@ -276,12 +288,19 @@ async def process_cc_loop_more(callback: CallbackQuery, state: FSMContext):
     await state.update_data(cc_id=chest_id)
     await state.set_state(ManagerCustomRewardSetup.waiting_for_type)
     
-    from bot.keyboards.manager_activities_kb import (
-        get_custom_reward_type_keyboard
-    )
+    custom_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(
+                text="💎 Валюта рейтинга", callback_data="cc_reward_type:rating"
+            ),
+            InlineKeyboardButton(
+                text="🎒 Физический мерч", callback_data="cc_reward_type:item"
+            )
+        ],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="cc_cancel")]
+    ])
     await callback.message.edit_text(
-        "🎁 **Следующая награда [Шаг 1/3]**:", 
-        reply_markup=get_custom_reward_type_keyboard()
+        "🎁 **Следующая награда [Шаг 1/3]**:", reply_markup=custom_kb
     )
     await callback.answer()
 
@@ -306,7 +325,7 @@ async def process_cc_manage_card(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
     if not is_manager: return
-    chest_id = int(callback.data.split(":"))
+    chest_id = int(callback.data.split(":")[1])
     
     chest = await db_session.get(CustomChest, chest_id)
     if not chest:
@@ -344,7 +363,9 @@ async def process_cc_manage_card(
                               callback_data="cc_main_menu")]
     ])
     
-    await callback.message.delete()
+    try: await callback.message.delete()
+    except Exception: pass
+
     if chest.media_url:
         await callback.message.answer_photo(
             chest.media_url, caption=text, reply_markup=kb, 
@@ -355,12 +376,13 @@ async def process_cc_manage_card(
             text, reply_markup=kb, parse_mode="Markdown"
         )
     await callback.answer()
+
 @router.callback_query(F.data.startswith("cc_delete:"))
 async def process_cc_delete(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
     if not is_manager: return
-    chest_id = int(callback.data.split(":"))
+    chest_id = int(callback.data.split(":")[1])
     chest = await db_session.get(CustomChest, chest_id)
     if chest:
         await db_session.delete(chest)
@@ -374,7 +396,7 @@ async def process_cc_add_r_rew(
     callback: CallbackQuery, is_manager: bool, state: FSMContext
 ):
     if not is_manager: return
-    chest_id = int(callback.data.split(":"))
+    chest_id = int(callback.data.split(":")[1])
     await start_reward_setup_loop(callback.message, state, chest_id)
     await callback.answer()
 
@@ -385,10 +407,9 @@ async def process_cc_send_now(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
     if not is_manager: return
-    chest_id = int(callback.data.split(":"))
+    chest_id = int(callback.data.split(":")[1])
     
     chest = await db_session.get(CustomChest, chest_id)
-    from database.models import ChatConfig
     chats_q = select(ChatConfig).where(ChatConfig.is_active == True)
     chats = (await db_session.execute(chats_q)).scalars().all()
     
@@ -424,7 +445,7 @@ async def process_cc_send_now(
 async def process_cc_user_open(
     callback: CallbackQuery, db_user: User, db_session: AsyncSession
 ):
-    chest_id = int(callback.data.split(":"))
+    chest_id = int(callback.data.split(":")[1])
     msg_id = callback.message.message_id
     
     # 🔒 АТОМАРНАЯ БЛОКИРОВКА В ПАМЯТИ ОТ RACE CONDITION
@@ -471,7 +492,7 @@ async def process_cc_user_open(
     win_list = random.choices(population, weights=weights, k=1)
     
     # ИСПРАВЛЕНО: строго берем элемент по индексу 0
-    win_reward = win_list
+    win_reward = win_list[0]
     
     if str(win_reward.reward_type) == "rating":
         amount = int(win_reward.value)
