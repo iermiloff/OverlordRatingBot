@@ -192,8 +192,6 @@ async def process_manager_user_inventory_list(callback: CallbackQuery, is_manage
 async def process_mg_u_inv_stub(callback: CallbackQuery):
     await callback.answer("ℹ️ Это информационная строка инвентаря юзера.", show_alert=True)
 
-# --- 🎁 No-Code НАЧИСЛЕНИЕ / СПИСАНИЕ БАЛАНСА АДМИНОМ ---
-
 @router.callback_query(F.data.startswith("mg_u_edit_bal:"))
 async def process_mg_u_edit_bal_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     """Запуск FSM-ожидания ввода нового баланса."""
@@ -204,9 +202,9 @@ async def process_mg_u_edit_bal_start(callback: CallbackQuery, is_manager: bool,
     
     await state.update_data(edit_user_id=user_id, edit_page=page)
     
-    # Регистрируем стейт динамически (проверь, чтобы State был в bot.states)
-    from bot.states import ManagerCustomRewardSetup 
-    await state.set_state(ManagerCustomRewardSetup.waiting_for_value)
+    # ✅ ИСПРАВЛЕНО: Переключаем на изолированную группу состояний
+    from bot.states import ManagerUserWalletEdit
+    await state.set_state(ManagerUserWalletEdit.waiting_for_balance_delta)
     
     await callback.message.answer(
         "💎 **Изменение баланса пользователя**\n\n"
@@ -215,12 +213,12 @@ async def process_mg_u_edit_bal_start(callback: CallbackQuery, is_manager: bool,
     )
     await callback.answer()
 
-@router.message(F.state == "ManagerCustomRewardSetup:waiting_for_value")
+
+@router.message(ManagerUserWalletEdit.waiting_for_balance_delta)
 async def process_mg_u_edit_bal_save(message: Message, state: FSMContext, db_session: AsyncSession):
     """Атомарное применение изменений баланса в СУБД."""
     text_input = message.text.strip()
     
-    # Проверяем на корректность ввода числа (включая знак минус)
     is_negative = text_input.startswith("-")
     clean_text = text_input.replace("-", "")
     
@@ -239,10 +237,10 @@ async def process_mg_u_edit_bal_save(message: Message, state: FSMContext, db_ses
         await state.clear()
         return
         
-    # Применяем изменения к кошелькам экосистемы
+    # Атомарно обновляем кошелек
     user.current_rating += delta
     if delta > 0:
-        user.lifetime_rating += delta # Опыт увеличиваем только при начислении
+        user.lifetime_rating += delta
         
     await db_session.commit()
     await state.clear()
@@ -254,7 +252,6 @@ async def process_mg_u_edit_bal_save(message: Message, state: FSMContext, db_ses
         f"💰 Новый кошелек: **{user.current_rating}** монет."
     )
     
-    # Уведомляем пользователя в ЛС об изменении счета
     try:
         msg_type = f"начислено ➕{delta}" if delta > 0 else f"списано ➖{abs(delta)}"
         await message.bot.send_message(
@@ -262,3 +259,4 @@ async def process_mg_u_edit_bal_save(message: Message, state: FSMContext, db_ses
             text=f"📊 **Баланс изменен администрацией!**\n\nВам {msg_type} {settings.CURRENCY_NAME}.\nТекущий счет: **{user.current_rating}** монет."
         )
     except Exception: pass
+
