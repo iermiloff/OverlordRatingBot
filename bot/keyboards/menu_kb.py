@@ -27,7 +27,7 @@ def get_manager_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📦 Настройка магазина", callback_data="mg_shop_back")
         ],
         [
-            InlineKeyboardButton(text="📥 Заявки/Заказы", callback_data="mg_orders_page:1"),
+            InlineKeyboardButton(text="📥 Заявки и Заказы (ERP)", callback_data="mg_users_page:1"),
             InlineKeyboardButton(text="🔒 Антифрод-система", callback_data="af_page:1")
         ],
         [
