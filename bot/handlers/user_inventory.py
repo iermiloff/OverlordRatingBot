@@ -37,7 +37,7 @@ units_q = select(StockUnit).options(
     joinedload(StockUnit.item)
 ).where(
     and_(
-        StockUnit.owner_id = db_user.tg_id, 
+        StockUnit.owner_id == db_user.tg_id,
         StockUnit.status.in_(["sold", "won"])
     )
 ).order_by(StockUnit.created_at.desc()).limit(limit).offset(offset)
