@@ -106,6 +106,76 @@ async def process_cc_desc(message: Message, state: FSMContext):
         reply_markup=skip_kb
     )
 
+# Вставляем строго под методом process_cc_desc:
+
+@router.message(
+    ManagerCustomChestSetup.waiting_for_media, 
+    F.photo | F.animation | F.document
+)
+async def process_cc_media(
+    message: Message, state: FSMContext, db_session: AsyncSession
+):
+    """Прием Фото/GIF на Шаге 3/3 и автоматический переход к наградам."""
+    media_id = None
+    
+    # 1. Проверяем, если прислали обычное фото
+    if message.photo:
+        media_id = message.photo[-1].file_id
+    # 2. Проверяем, если прислали нативную анимацию
+    elif message.animation:
+        media_id = message.animation.file_id
+    # 3. Проверяем, если GIF пришла как документ
+    elif message.document:
+        mime = message.document.mime_type
+        if mime and (mime.startswith("image/") or mime.startswith("video/")):
+            media_id = message.document.file_id
+            
+    if not media_id:
+        await message.answer(
+            "❌ **Неподдерживаемый формат медиа!**\n"
+            "Пожалуйста, отправьте картинку как фото или GIF-анимацию:"
+        )
+        return
+
+    # Извлекаем текстовые параметры сундука из FSM памяти
+    data = await state.get_data()
+    
+    # Атомарно сохраняем кастомный сундук в PostgreSQL
+    new_chest = CustomChest(
+        name=data.get("cc_name"),
+        description=data.get("cc_desc"),
+        media_url=media_id
+    )
+    db_session.add(new_chest)
+    await db_session.commit()
+    
+    # Запускаем пошаговый цикл настройки призового пула наград
+    await start_reward_setup_loop(message, state, new_chest.id)
+
+@router.callback_query(
+    ManagerCustomChestSetup.waiting_for_media, 
+    F.data == "cc_skip_media"
+)
+async def process_cc_skip_media(
+    callback: CallbackQuery, state: FSMContext, db_session: AsyncSession
+):
+    """Обработка кнопки пропуска медиа на Шаге 3/3."""
+    data = await state.get_data()
+    
+    # Создаем сундук без картинки (media_url=None)
+    new_chest = CustomChest(
+        name=data.get("cc_name"),
+        description=data.get("cc_desc"),
+        media_url=None
+    )
+    db_session.add(new_chest)
+    await db_session.commit()
+    
+    # Запускаем пошаговую настройку наград
+    await start_reward_setup_loop(callback.message, state, new_chest.id)
+    await callback.answer()
+
+
 # --- ➕ ЦИКЛИЧЕСКОЕ ДОБАВЛЕНИЕ НАГРАД (FSM) ---
 
 async def start_reward_setup_loop(msg: Message, state: FSMContext, chest_id: int):
