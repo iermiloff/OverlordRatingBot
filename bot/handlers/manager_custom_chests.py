@@ -321,12 +321,12 @@ async def process_cc_loop_stop(
         db_session=db_session
     )
 
-
-@router.callback_query(F.data.startswith("cc_manage:"))
 async def render_custom_chest_card(
-    callback: CallbackQuery, chest_id: int, db_session: AsyncSession
+    callback: CallbackQuery, 
+    chest_id: int, 
+    db_session: AsyncSession
 ):
-    """Универсальная функция вывода карточки сундука (без мутации Pydantic)"""
+    """Строгая функция вывода карточки с именованными параметрами."""
     chest = await db_session.get(CustomChest, chest_id)
     if not chest:
         await callback.answer("❌ Сундук удален.", show_alert=True)
@@ -392,12 +392,15 @@ async def render_custom_chest_card(
 async def process_cc_manage_card(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
-    """Обычный клик менеджера по сундуку из списка пагинации"""
     if not is_manager: return
+    
     chest_id = int(callback.data.split(":")[1])
-    await render_custom_chest_card(callback, chest_id, db_session)
-
-
+    
+    await render_custom_chest_card(
+        callback=callback, 
+        chest_id=chest_id, 
+        db_session=db_session
+    )
 
 @router.callback_query(F.data.startswith("cc_delete:"))
 async def process_cc_delete(
