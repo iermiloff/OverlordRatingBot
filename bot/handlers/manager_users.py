@@ -1,199 +1,197 @@
+import logging
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery
-from aiogram.fsm.context import FSMContext
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import select, func, and_
 
-from config import settings
-from database.models import User, ShopItem, Order, OrderStatus
-from services.rating import get_user_title_name
-from bot.keyboards.manager_users_kb import (
-    get_users_list_keyboard, get_user_profile_keyboard, get_gift_items_keyboard
-)
-from bot.states import ManagerUserActions
+from database.models import User, ShopItem, StockUnit
 
 router = Router(name="manager_users_router")
+logger = logging.getLogger(__name__)
 
-USERS_PER_PAGE = 5
-
-async def send_users_page(message_or_query, session: AsyncSession, page: int = 1):
-    """Отрисовка списка пользователей для менеджера."""
-    count_query = select(func.count(User.tg_id))
-    total_users = (await session.execute(count_query)).scalar()
-
-    if total_users == 0:
-        text = "👥 **Список пользователей**\n\nВ базе данных еще нет зарегистрированных пользователей."
-        if isinstance(message_or_query, Message):
-            await message_or_query.answer(text, parse_mode="Markdown")
-        else:
-            await message_or_query.message.edit_text(text, parse_mode="Markdown")
-        return
-
-    offset_value = (page - 1) * USERS_PER_PAGE
-    users_query = select(User).order_by(User.created_at.desc()).limit(USERS_PER_PAGE).offset(offset_value)
-    users = (await session.execute(users_query)).scalars().all()
-    has_next = (page * USERS_PER_PAGE) < total_users
-
-    text = f"👥 **Управление пользователями (Страница {page})**\n\nВыберите пользователя из списка ниже для просмотра досье и изменения настроек:"
-    reply_markup = get_users_list_keyboard(users, page, has_next)
-
-    if isinstance(message_or_query, Message):
-        await message_or_query.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
-    else:
-        try:
-            await message_or_query.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception:
-            await message_or_query.answer()
-
-@router.message(F.text == "👥 Список пользователей", F.data.cast(bool) == False) # Игнорируем если флаг is_manager False, но middleware уже фильтрует
-async def cmd_manager_users(message: Message, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    await send_users_page(message, db_session, page=1)
+# --- 👥 ГЛАВНЫЙ СПИСОК ПОЛЬЗОВАТЕЛЕЙ ДЛЯ АДМИНА ---
 
 @router.callback_query(F.data.startswith("mg_users_page:"))
-async def process_mg_users_page(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+async def cmd_manager_users_list(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    """Вывод списка участников экосистемы с постраничной пагинацией."""
     if not is_manager: return
-    page = int(callback.data.split(":")[1])
-    await send_users_page(callback, db_session, page=page)
-
-@router.callback_query(F.data.startswith("mg_user_view:"))
-async def process_mg_user_view(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    _, user_id, page = callback.data.split(":")
-    user_id, page = int(user_id), int(page)
-
-    user = await db_session.get(User, user_id)
-    if not user:
-        await callback.answer("❌ Пользователь не найден.", show_alert=True)
-        return
-
-    title_name = get_user_title_name(user.lifetime_rating)
-    status_text = "❌ ЗАБАНЕН" if user.is_banned else ("⚠️ ПОДОЗРИТЕЛЬНЫЙ" if user.is_suspicious else "✅ Активен")
-
+    
+    page = int(callback.data.split(":"))
+    limit = 6
+    offset = (page - 1) * limit
+    
+    count_q = select(func.count(User.tg_id))
+    total = (await db_session.execute(count_q)).scalar() or 0
+    
+    users_q = select(User).order_by(User.created_at.desc()).limit(limit).offset(offset)
+    users = (await db_session.execute(users_q)).scalars().all()
+    
     text = (
-        f"👤 **Досье пользователя**\n\n"
-        f"▪️ **Имя:** {user.full_name}\n"
-        f"▪️ **Юзернейм:** @{user.username or 'отсутствует'}\n"
-        f"▪️ **Telegram ID:** `{user.tg_id}`\n"
-        f"▪️ **Статус:** {status_text}\n"
-        f"▪️ **Титул:** {title_name}\n\n"
-        f"💳 **Текущий кошелек:** {user.current_rating} {settings.CURRENCY_NAME}\n"
-        f"📈 **Опыт за все время:** {user.lifetime_rating} {settings.CURRENCY_NAME}\n"
+        "👥 **Управление пользователями системы**\n\n"
+        f"Всего зарегистрировано участников: **{total}** юзеров.\n"
+        f"Текущая страница в админке: `{page}`"
     )
-    if user.antifraud_reason:
-        text += f"\n🚨 **Причина проверки анти-фродом:**\n_{user.antifraud_reason}_\n"
-
-    await callback.message.edit_text(text, reply_markup=get_user_profile_keyboard(user.tg_id, page), parse_mode="Markdown")
-    await callback.answer()
-
-@router.callback_query(F.data.startswith("mg_user_rate:"))
-async def process_mg_user_rate_click(callback: CallbackQuery, is_manager: bool, state: FSMContext):
-    if not is_manager: return
-    _, user_id, page = callback.data.split(":")
     
-    await state.set_state(ManagerUserActions.waiting_for_rating_amount)
-    await state.update_data(target_user_id=int(user_id), return_page=int(page))
-
-    await callback.message.answer(
-        "💎 **Изменение баланса пользователя**\n\n"
-        "Введите целое число, на которое хотите изменить баланс.\n"
-        "👉 Чтобы *начислить*, введите, например: `100`\n"
-        "👉 Чтобы *снять*, введите со знаком минус: `-50`",
-        parse_mode="Markdown"
-    )
-    await callback.answer()
-
-@router.message(ManagerUserActions.waiting_for_rating_amount)
-async def process_rating_input_manager(message: Message, state: FSMContext, db_session: AsyncSession):
-    data = await state.get_data()
-    user_id = data.get("target_user_id")
-    page = data.get("return_page")
-
-    # Валидация ввода менеджера
-    text_input = message.text.strip()
-    try:
-        amount = int(text_input)
-    except ValueError:
-        await message.answer("❌ Ошибка! Введите корректное целое число (например, 150 или -50).")
-        return
-
-    user = await db_session.get(User, user_id)
-    if not user:
-        await message.answer("❌ Пользователь исчез из базы данных.")
-        await state.clear()
-        return
-
-    # Обновляем баланс
-    user.current_rating += amount
-    if amount > 0:
-        user.lifetime_rating += amount # Исторический опыт растет только при начислении плюса
-
-    await db_session.commit()
-    await state.clear()
-
-    await message.answer(f"✅ Успешно! Баланс пользователя {user.full_name} изменен на {amount} {settings.CURRENCY_NAME}.")
+    buttons = []
+    for u in users:
+        ban_tag = " [🚫 BAN]" if u.is_banned else ""
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"👤 @{u.username or u.tg_id} | 💎 {u.current_rating}{ban_tag}", 
+                callback_data=f"mg_u_view:{u.tg_id}:{page}"
+            )
+        ])
+        
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mg_users_page:{page-1}"))
+    if page * limit < total:
+        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"mg_users_page:{page+1}"))
+    if nav_row:
+        buttons.append(nav_row)
+        
+    buttons.append([InlineKeyboardButton(text="↩️ Назад в корень меню", callback_data="main_menu_manager")])
     
-    # Автоматически отправляем пользователю уведомление о действии админа
     try:
-        notification = f"🔔 Менеджер начислил вам +{amount} {settings.CURRENCY_NAME}!" if amount > 0 else f"🔔 Менеджер списал с вашего баланса {abs(amount)} {settings.CURRENCY_NAME}."
-        await message.bot.send_message(chat_id=user.tg_id, text=notification)
-    except Exception:
-        pass
-
-@router.callback_query(F.data.startswith("mg_user_gift:"))
-async def process_mg_user_gift_click(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    _, user_id, page = callback.data.split(":")
-    user_id, page = int(user_id), int(page)
-
-    # Запрашиваем доступные товары
-    items_result = await db_session.execute(select(ShopItem).where(ShopItem.is_deleted == False))
-    items = items_result.scalars().all()
-
-    if not items:
-        await callback.answer("❌ В магазине нет созданных товаров для выдачи подарка.", show_alert=True)
-        return
-
-    await callback.message.edit_text(
-        "🎁 **Выдача подарка от администрации**\n\nВыбери из списка товар, который будет выдан пользователю бесплатно:",
-        reply_markup=get_gift_items_keyboard(items, user_id, page),
-        parse_mode="Markdown"
-    )
-
-@router.callback_query(F.data.startswith("mg_gift_confirm:"))
-async def process_mg_gift_confirm(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
-    _, user_id, item_id, page = callback.data.split(":")
-    user_id, item_id, page = int(user_id), int(item_id), int(page)
-
-    user = await db_session.get(User, user_id)
-    item = await db_session.get(ShopItem, item_id)
-
-    if not user or not item or item.is_deleted:
-        await callback.answer("❌ Ошибка: пользователь или товар не найдены.", show_alert=True)
-        return
-
-    # Оформляем заказ со статусом COMPLETED (так как админ выдает его лично на руки прямо сейчас)
-    new_order = Order(
-        user_id=user.tg_id,
-        source="gift",
-        item_name=f"[ПОДАРОК] {item.name}",
-        status=OrderStatus.COMPLETED,
-        delivery_data="Выдано менеджером вручную через панель управления"
-    )
-    db_session.add(new_order)
-    await db_session.commit()
-
-    await callback.answer(f"🎁 Товар '{item.name}' успешно подарен!", show_alert=True)
-    
-    # Уведомляем счастливчика
-    try:
-        await callback.bot.send_message(
-            chat_id=user.tg_id, 
-            text=f"🎉 Менеджер сделал вам подарок! Вам выдан товар: **{item.name}**.\nПроверить статус можно в '🎁 Мои Награды'."
+        await callback.message.edit_text(
+            text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown"
         )
     except Exception:
-        pass
+        await callback.answer()
 
-    # Возвращаем менеджера в профиль юзера
-    await process_mg_user_view(callback, is_manager, db_session)
+# --- 🔎 ДЕТАЛЬНЫЙ АУДИТ ПРОФИЛЯ ЮЗЕРА ---
+
+@router.callback_query(F.data.startswith("mg_u_view:"))
+async def process_manager_user_view(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    """Карточка пользователя: скоринг рейтинга, бана и объема инвентаря ERP."""
+    if not is_manager: return
+    parts = callback.data.split(":")
+    user_id = int(parts)
+    page = int(parts)
+    
+    user = await db_session.get(User, user_id)
+    if not user:
+        await callback.answer("❌ Юзер не найден в СУБД!", show_alert=True)
+        return
+        
+    # Считаем количество купленных/выигранных предметов на Складе ERP
+    inv_cnt_q = select(func.count(StockUnit.id)).where(
+        and_(StockUnit.owner_id == user_id, StockUnit.status.in_(["sold", "won"]))
+    )
+    items_count = (await db_session.execute(inv_cnt_q)).scalar() or 0
+    
+    status_label = "🚫 ЗАБАНЕН" if user.is_banned else "🟢 Активен"
+    fraud_tag = "⚠️ ПОДОЗРИТЕЛЬНЫЙ" if user.is_suspicious else "✅ Чистый"
+    
+    text = (
+        f"👤 **Профиль участника: @{user.username or 'без_ника'}**\n\n"
+        f"▪️ **Telegram ID:** <code>{user.tg_id}</code>\n"
+        f"▪️ **Discord ID:** <code>{user.discord_id or 'Не привязан'}</code>\n\n"
+        f"💎 **Текущий кошелек:** {user.current_rating} монет\n"
+        f"🏆 **Всего заработано:** {user.lifetime_rating} поинтов опыта\n"
+        f"🎒 **Предметов в инвентаре:** {items_count} шт.\n\n"
+        f"⚙️ **Статусы безопасности:**\n"
+        f"▪️ Системный статус: `{status_label}`\n"
+        f"▪️ Скоринг антифрода: `{fraud_tag}`\n"
+        f"▪️ Причина детекта: _{user.antifraud_reason or 'Нет замечаний'}_"
+    )
+    
+    ban_btn_text = "🔓 Разбанить" if user.is_banned else "🚫 Забанить"
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="🎁 Изменить баланс", callback_data=f"mg_u_edit_bal:{user_id}:{page}"),
+            InlineKeyboardButton(text=ban_btn_text, callback_data=f"mg_u_ban_toggle:{user_id}:{page}")
+        ],
+        [
+            InlineKeyboardButton(text="📦 Посмотреть инвентарь", callback_data=f"mg_u_inv_list:{user_id}:1:{page}"),
+            InlineKeyboardButton(text="↩️ К списку", callback_data=f"mg_users_page:{page}")
+        ]
+    ])
+    
+    await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+# --- ⚙️ УПРАВЛЕНИЕ БАНОМ И АДМИНСКИЙ ПРОСМОТР ИНВЕНТАРЯ ЮЗЕРА ---
+
+@router.callback_query(F.data.startswith("mg_u_ban_toggle:"))
+async def process_manager_user_ban_toggle(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Атомарное переключение статуса бана пользователя в системе."""
+    if not is_manager: return
+    parts = callback.data.split(":")
+    user_id = int(parts[1])
+    page = int(parts[2])
+    
+    user = await db_session.get(User, user_id)
+    if user:
+        user.is_banned = not user.is_banned
+        await db_session.commit()
+        act = "забанен" if user.is_banned else "разбанен"
+        await callback.answer(f"✅ Пользователь успешно {act}!", show_alert=True)
+        
+    await process_manager_user_view(callback, is_manager, db_session)
+
+@router.callback_query(F.data.startswith("mg_u_inv_list:"))
+async def process_manager_user_inventory_list(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Постраничный No-Code аудит инвентаря конкретного юзера для админа."""
+    if not is_manager: return
+    parts = callback.data.split(":")
+    user_id = int(parts[1])
+    inv_page = int(parts[2])
+    back_page = int(parts[3])
+    
+    limit = 5
+    offset = (inv_page - 1) * limit
+    
+    # Считаем предметы юзера со статусом 'sold' или 'won'
+    count_q = select(func.count(StockUnit.id)).where(
+        and_(StockUnit.owner_id == user_id, StockUnit.status.in_(["sold", "won"]))
+    )
+    total = (await db_session.execute(count_q)).scalar() or 0
+    
+    units_q = select(StockUnit).where(
+        and_(StockUnit.owner_id == user_id, StockUnit.status.in_(["sold", "won"]))
+    ).order_by(StockUnit.created_at.desc()).limit(limit).offset(offset)
+    units = (await db_session.execute(units_q)).scalars().all()
+    
+    text = (
+        f"🎒 **Аудит инвентаря пользователя (ID: {user_id})**\n\n"
+        f"Всего предметов во владении: **{total}** шт.\n"
+        f"Страница пагинации инвентаря: `{inv_page}`\n\n"
+        f"👇 Список уникальных цифровых и физических единиц ERP:"
+    )
+    
+    buttons = []
+    for u in units:
+        item_name = u.item.name if u.item else f"Предмет #{u.item_id}"
+        src = "🛒" if u.purchase_source == "tg" else "🎁"
+        promo_snippet = f" | 🔑 {u.serial_or_promo[:10]}..." if u.serial_or_promo else ""
+        
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{src} ID: {u.id} | {item_name}{promo_snippet}",
+                callback_data="mg_u_inv_stub" # Заглушка, чисто просмотр строки
+            )
+        ])
+        
+    nav_row = []
+    if inv_page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mg_u_inv_list:{user_id}:{inv_page-1}:{back_page}"))
+    if inv_page * limit < total:
+        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"mg_u_inv_list:{user_id}:{inv_page+1}:{back_page}"))
+    if nav_row:
+        buttons.append(nav_row)
+        
+    buttons.append([InlineKeyboardButton(text="↩️ Вернуться к профилю", callback_data=f"mg_u_view:{user_id}:{back_page}")])
+    
+    await callback.message.edit_text(
+        text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown"
+    )
+    await callback.answer()
+
+@router.callback_query(F.data == "mg_u_inv_stub")
+async def process_mg_u_inv_stub(callback: CallbackQuery):
+    await callback.answer("ℹ️ Это информационная строка инвентаря юзера.", show_alert=True)
