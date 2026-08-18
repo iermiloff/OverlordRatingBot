@@ -67,7 +67,7 @@ async def cmd_user_inventory_main(message_or_query, db_session: AsyncSession, db
     if nav_row:
         buttons.append(nav_row)
         
-    buttons.append([InlineKeyboardButton(text="↩️ В главное меню ЛК", callback_data="user_lk_main")])
+    buttons.append([InlineKeyboardButton(text="↩️ В главное меню ЛК", callback_data="user_stats")])
     
     kb = InlineKeyboardMarkup(inline_keyboard=buttons)
     if is_callback:
