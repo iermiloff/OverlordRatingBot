@@ -245,31 +245,58 @@ async def process_add_reward_start(
     ManagerActivitySetup.waiting_for_reward_type, 
     F.data.startswith("act_type:")
 )
-async def process_reward_type_choice(callback: CallbackQuery, state: FSMContext):
-    chosen_type = callback.data.split(":")
+async def process_reward_type_choice(
+    callback: CallbackQuery, state: FSMContext
+):
+    """Шаг 2/3: Адаптивный текст подсказки в зависимости от типа награды."""
+    # Извлекаем тип (rating или item)
+    chosen_type = callback.data.split(":")[1]
     await state.update_data(reward_type=chosen_type)
     await state.set_state(ManagerActivitySetup.waiting_for_reward_value)
  
-    p = (
-        " Введите **количество рейтинга** (целое число):"
-        if chosen_type == "rating" else
-        " Введите **название мерча** (например: _Худи_):"
+    # ✅ ИСПРАВЛЕНО: Текст теперь строго разделяется для Валюты и Мерча
+    if chosen_type == "rating":
+        prompt = (
+            f"Введите **количество {settings.CURRENCY_NAME}**, "
+            f"которое получит юзер (например: `100`):"
+        )
+    else:
+        prompt = (
+            "Введите **название физического мерча** "
+            "(например: _Худи с логотипом_):"
+        )
+        
+    await callback.message.edit_text(
+        f"🎁 **Настройка сундука [Шаг 2/3]**\n\n{prompt}",
+        parse_mode="Markdown"
     )
-    await callback.message.answer(f" **Настройка [Шаг 2/3]**\n\n{p}")
     await callback.answer()
+
 
 @router.message(ManagerActivitySetup.waiting_for_reward_value)
 async def process_reward_value(message: Message, state: FSMContext):
+    """Валидация введенного номинала награды (Валюта или Товар)."""
     data = await state.get_data()
     r_type = data.get("reward_type")
     text_input = message.text.strip()
+    
+    # ✅ ИСПРАВЛЕНО: Четкая проверка на числовой ввод для типа валюты
     if r_type == "rating" and not text_input.isdigit():
-        await message.answer("❌Ошибка! Введите целое число:")
+        await message.answer(
+            f"❌ **Ошибка ввода!**\n"
+            f"Для типа 'Валюта' необходимо ввести корректное "
+            f"целое число поинтов. Попробуйте еще раз:"
+        )
         return
+        
     await state.update_data(reward_value=text_input)
     await state.set_state(ManagerActivitySetup.waiting_for_reward_weight)
+    
     await message.answer(
-        " **Настройка [Шаг 3/3]**\n\nУкажите **вес выпадения** (напр. `1.0`):"
+        "🎁 **Настройка сундука [Шаг 3/3]**\n\n"
+        "Укажите **математический вес (вероятность)** выпадения "
+        "этой награды (например, `1.0` или `0.1`):",
+        parse_mode="Markdown"
     )
 
 @router.message(ManagerActivitySetup.waiting_for_reward_weight)
