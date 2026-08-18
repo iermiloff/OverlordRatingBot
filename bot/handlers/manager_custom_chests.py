@@ -407,7 +407,9 @@ async def process_cc_delete(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
     if not is_manager: return
+    
     chest_id = int(callback.data.split(":")[1])
+    
     chest = await db_session.get(CustomChest, chest_id)
     if chest:
         await db_session.delete(chest)
@@ -421,11 +423,11 @@ async def process_cc_add_r_rew(
     callback: CallbackQuery, is_manager: bool, state: FSMContext
 ):
     if not is_manager: return
+    
     chest_id = int(callback.data.split(":")[1])
+    
     await start_reward_setup_loop(callback.message, state, chest_id)
     await callback.answer()
-
-
 
 @router.callback_query(F.data.startswith("cc_send_now:"))
 async def process_cc_send_now(
