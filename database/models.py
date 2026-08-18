@@ -7,6 +7,19 @@ from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
+class PromoChannel(Base):
+    """Модель отслеживания обязательных каналов подписки (Telegram/Discord)."""
+    __tablename__ = "promo_channels"
+    
+    id = Column(BigInteger, primary_key=True) # ID канала или сервера
+    name = Column(String(128), nullable=False)
+    invite_link = Column(String(256), nullable=True)
+    
+    # ШЛЮЗ: 'tg' или 'discord'
+    platform = Column(String(32), default="tg", nullable=False)
+    is_required = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
 class User(Base):
     """Модель профиля участника кроссплатформенной экосистемы."""
     __tablename__ = "users"
