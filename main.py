@@ -24,29 +24,25 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 async def init_db():
-    """Автоматически создает таблицы и обновляет структуру старых таблиц при старте."""
+    """Автоматически создает новые таблицы базы данных при старте."""
     logger.info("Инициализация базы данных...")
     max_retries = 5
     for attempt in range(1, max_retries + 1):
         try:
-            # 1. Создаем новые таблицы, если их нет
+            # Создаем все новые поштучные таблицы ERP-склада, если их нет
             async with engine.begin() as conn:
                 await conn.run_sync(Base.metadata.create_all)
-            
-            # 2. Накатываем обновление для старой таблицы chats_config (добавляем invite_link)
-            async with engine.connect() as conn:
-                await conn.execute(
-                    text("ALTER TABLE chats_config ADD COLUMN IF NOT EXISTS invite_link VARCHAR(256);")
-                )
-                await conn.commit()
                 
-            logger.info("База данных успешно инициализирована и обновлена!")
+            logger.info("База данных успешно инициализирована!")
             return
         except Exception as e:
             if attempt == max_retries:
                 logger.error("❌ Не удалось подключиться к базе данных.")
                 raise e
-            logger.warning(f"⚠️ База данных еще не готова (Попытка {attempt}/{max_retries}). Ожидание 2 секунды...")
+            logger.warning(
+                f"⚠️ База данных еще не готова (Попытка {attempt}/{max_retries}). "
+                f"Ожидание 2 секунды..."
+            )
             await asyncio.sleep(2)
 
 
@@ -86,5 +82,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
 
