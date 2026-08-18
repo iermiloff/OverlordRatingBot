@@ -367,15 +367,30 @@ async def process_cc_manage_card(
     except Exception: pass
 
     if chest.media_url:
-        await callback.message.answer_photo(
-            chest.media_url, caption=text, reply_markup=kb, 
-            parse_mode="Markdown"
-        )
+        try:
+            # 1. Первая попытка: отправляем как фото
+            await callback.message.answer_photo(
+                chest.media_url, caption=text, reply_markup=kb, 
+                parse_mode="Markdown"
+            )
+        except Exception:
+            # 2. Фолбек: если это анимация/GIF, Telegram выдаст ошибку, и мы шлем как GIF!
+            try:
+                await callback.message.answer_animation(
+                    chest.media_url, caption=text, reply_markup=kb, 
+                    parse_mode="Markdown"
+                )
+            except Exception:
+                # 3. Крайний случай: если файл сломался, шлем просто текстом
+                await callback.message.answer(
+                    text, reply_markup=kb, parse_mode="Markdown"
+                )
     else:
         await callback.message.answer(
             text, reply_markup=kb, parse_mode="Markdown"
         )
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("cc_delete:"))
 async def process_cc_delete(
@@ -400,16 +415,16 @@ async def process_cc_add_r_rew(
     await start_reward_setup_loop(callback.message, state, chest_id)
     await callback.answer()
 
-# --- 🚀 РУЧНОЙ ВЫБРОС В ГРУППЫ ---
 
 @router.callback_query(F.data.startswith("cc_send_now:"))
 async def process_cc_send_now(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
     if not is_manager: return
-    chest_id = int(callback.data.split(":")[1])
+    chest_id = int(callback.data.split(":"))
     
     chest = await db_session.get(CustomChest, chest_id)
+    from database.models import ChatConfig
     chats_q = select(ChatConfig).where(ChatConfig.is_active == True)
     chats = (await db_session.execute(chats_q)).scalars().all()
     
@@ -423,21 +438,40 @@ async def process_cc_send_now(
     ])
     
     for chat in chats:
-        try:
-            if chest.media_url:
+        if chest.media_url:
+            try:
+                # 1. Пробуем отправить как обычное фото
                 await callback.bot.send_photo(
                     chat_id=chat.id, photo=chest.media_url, 
                     caption=chest.description, reply_markup=kb, 
                     parse_mode="Markdown"
                 )
-            else:
+            except Exception:
+                try:
+                    # 2. Фолбек: отправляем как GIF-анимацию
+                    await callback.bot.send_animation(
+                        chat_id=chat.id, animation=chest.media_url, 
+                        caption=chest.description, reply_markup=kb, 
+                        parse_mode="Markdown"
+                    )
+                except Exception:
+                    try:
+                        # 3. Крайний фолбек: шлем чистым текстом
+                        await callback.bot.send_message(
+                            chat_id=chat.id, text=chest.description, 
+                            reply_markup=kb, parse_mode="Markdown"
+                        )
+                    except Exception: pass
+        else:
+            try:
                 await callback.bot.send_message(
                     chat_id=chat.id, text=chest.description, 
                     reply_markup=kb, parse_mode="Markdown"
                 )
-        except Exception: pass
+            except Exception: pass
         
     await callback.answer("🚀 Сундук заброшен в чаты!", show_alert=True)
+
 
 # --- 👑 КЛИК ОБЫЧНОГО ПОЛЬЗОВАТЕЛЯ (ОТКРЫТИЕ ИЗ ЧАТА) ---
 
