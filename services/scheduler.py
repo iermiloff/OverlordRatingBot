@@ -1,7 +1,7 @@
 import logging
 import random
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select, and_
