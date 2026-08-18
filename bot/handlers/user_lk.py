@@ -9,7 +9,30 @@ from bot.keyboards.menu_kb import get_back_to_menu_keyboard, get_user_inline_men
 
 router = Router(name="user_lk_router")
 
-# --- РАЗДЕЛ ЧАТОВ ПРОЕКТА ---
+@router.callback_query(F.data == "user_lk_main")
+async def cmd_user_lk_main_hub(
+    callback: CallbackQuery, db_user: User, db_session: AsyncSession
+):
+    """Центральный узел ЛК. Отрисовывает сетку кнопок для пользователя."""
+    text = (
+        f"👤 **Личный Кабинет Участника**\n\n"
+        f"▪️ Покровитель: {callback.from_user.mention_html()}\n"
+        f"💰 Баланс: **{db_user.current_rating}** {settings.CURRENCY_NAME}\n"
+        f"🏆 Общий опыт: **{db_user.lifetime_rating}** XP"
+    )
+
+    from bot.keyboards.menu_kb import get_user_inline_menu
+    
+    try:
+        await callback.message.edit_text(
+            text=text, 
+            reply_markup=get_user_inline_menu(), 
+            parse_mode="HTML"
+        )
+    except Exception:
+        pass
+    await callback.answer()
+
 
 @router.callback_query(F.data == "user_chats")
 async def show_user_chats(callback: CallbackQuery, db_session: AsyncSession):
