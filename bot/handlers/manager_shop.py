@@ -350,3 +350,136 @@ async def process_mg_item_delete(callback: CallbackQuery, is_manager: bool, db_s
         
     callback.data = f"mg_stock_page:{page}"
     await cmd_manager_shop_stock_main(callback, is_manager, db_session)
+
+# --- 📥 КОНВЕЙЕР ОБРАБОТКИ ВХОДЯЩИХ ЗАЯВОК НА МЕРЧ И ВАУЧЕРЫ ---
+
+@router.callback_query(F.data.startswith("mg_orders_queue:"))
+async def cmd_manager_orders_queue(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Вывод реальной очереди необработанных заявок на мерч и крипту."""
+    if not is_manager: return
+    
+    page = int(callback.data.split(":")[1])
+    limit = 5
+    offset = (page - 1) * limit
+    
+    # Ищем предметы, где в серийнике висит активная [ЗАЯВКА] от юзера
+    queue_q = select(StockUnit).where(
+        StockUnit.serial_or_promo.like("[ЗАЯВКА]:%")
+    ).order_by(StockUnit.updated_at.asc())
+    
+    # Считаем общее количество заявок в очереди
+    total_q = select(func.count(StockUnit.id)).where(
+        StockUnit.serial_or_promo.like("[ЗАЯВКА]:%")
+    )
+    total = (await db_session.execute(total_q)).scalar() or 0
+    
+    units = (await db_session.execute(
+        queue_q.limit(limit).offset(offset)
+    )).scalars().all()
+    
+    text = (
+        "📥 **Очередь активных заявок на выдачу**\n\n"
+        "Сюда попадают физический мерч, требующий отправки, "
+        "и ручные ваучеры (TON/крипта), где юзер оставил реквизиты.\n\n"
+        f"Всего заявок ожидает обработки: **{total}** шт."
+    )
+    
+    buttons = []
+    for u in units:
+        item_name = u.item.name if u.item else f"Предмет #{u.item_id}"
+        # Вырезаем префикс для короткого превью кнопки
+        clean_user_data = u.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()[:15]
+        
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"📦 {item_name} | 👤 ID: {u.owner_id} ({clean_user_data}...)",
+                callback_data=f"mg_order_manage:{u.id}:{page}"
+            )
+        ])
+        
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mg_orders_queue:{page-1}"))
+    if page * limit < total:
+        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"mg_orders_queue:{page+1}"))
+    if nav_row:
+        buttons.append(nav_row)
+        
+    buttons.append([InlineKeyboardButton(text="↩️ В корень админки", callback_data="main_menu_manager")])
+    
+    await callback.message.edit_text(
+        text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mg_order_manage:"))
+async def process_manager_order_manage_card(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Детальная карточка обработки конкретной заявки."""
+    if not is_manager: return
+    parts = callback.data.split(":")
+    unit_id = int(parts[1])
+    page = int(parts[2])
+    
+    unit = await db_session.get(StockUnit, unit_id)
+    if not unit or not unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
+        await callback.answer("❌ Заявка уже обработана или не найдена!", show_alert=True)
+        await cmd_manager_orders_queue(callback, is_manager, db_session)
+        return
+        
+    item_name = unit.item.name if unit.item else f"Предмет #{unit.item_id}"
+    user_reqs = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
+    
+    text = (
+        f"📥 **Управление заявкой #{unit.id}**\n\n"
+        f"🎒 **Что выдать:** {item_name}\n"
+        f"👤 **ID получателя:** <code>{unit.owner_id}</code>\n"
+        f"📅 **Дата оформления:** {unit.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
+        f"📋 **Реквизиты / Данные доставки:**\n<code>{user_reqs}</code>\n\n"
+        f"👇 После отправки мерча или перевода нажмите кнопку ниже:"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="✅ Выдано / Отправлено", callback_data=f"mg_order_close:{unit_id}:{page}"),
+            InlineKeyboardButton(text="↩️ Назад к очереди", callback_data=f"mg_orders_queue:{page}")
+        ]
+    ])
+    
+    await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mg_order_close:"))
+async def process_manager_order_close(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Атомарное закрытие заявки и перевод в статус выполненных."""
+    if not is_manager: return
+    parts = callback.data.split(":")
+    unit_id = int(parts[1])
+    page = int(parts[2])
+    
+    unit = await db_session.get(StockUnit, unit_id)
+    if unit and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
+        # Переводим метку в состояние архивной выдачи
+        unit.serial_or_promo = unit.serial_or_promo.replace("[ЗАЯВКА]:", "[ВЫДАНО]:")
+        await db_session.commit()
+        await callback.answer("✅ Заявка успешно закрыта и убрана из очереди!", show_alert=True)
+        
+        # Оповещаем пользователя в ЛС, если это возможно
+        try:
+            item_name = unit.item.name if unit.item else "Товар"
+            await callback.bot.send_message(
+                chat_id=unit.owner_id,
+                text=f"🎉 **Ваш заказ '{item_name}' (ID: {unit.id}) успешно отправлен/выдан администрацией!**"
+            )
+        except Exception: pass
+        
+    # Возвращаемся в очередь на текущую страницу
+    callback.data = f"mg_orders_queue:{page}"
+    await cmd_manager_orders_queue(callback, is_manager, db_session)
