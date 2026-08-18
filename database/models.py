@@ -32,7 +32,9 @@ class User(Base):
     
     current_rating = Column(Integer, default=0)    # Доступный баланс
     lifetime_rating = Column(Integer, default=0)   # Исторический опыт
-    timezone = Column(String(32), default="UTC", nullable=False)  
+    timezone = Column(String(32), default="UTC", nullable=False) 
+    referrer_id = Column(BigInteger, nullable=True)
+    referred_users_count = Column(Integer, default=0, nullable=False)
     is_suspicious = Column(Boolean, default=False) # Антифрод
     antifraud_reason = Column(String(256), nullable=True)
     is_banned = Column(Boolean, default=False)
