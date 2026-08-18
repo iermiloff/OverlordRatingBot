@@ -11,77 +11,77 @@ router = Router(name="manager_orders_router")
 
 ORDERS_PER_PAGE = 1
 
-async def send_admin_orders_page(callback_or_message, session: AsyncSession, page: int = 1):
-    """Отрисовка панели заявок для менеджера с постраничной пагинацией очереди."""
-    # Считаем только те заказы, которые требуют активного внимания (CREATED и PROCESSED)
-    count_query = select(func.count(Order.id)).where(
-        Order.status.in_([OrderStatus.CREATED, OrderStatus.PROCESSED])
-    )
-    total_orders = (await session.execute(count_query)).scalar()
+# --- 📥 БЕЗОПАСНЫЙ ВЫВОД СТРАНИЦЫ ЗАЯВОК И ЗАКАЗОВ ---
 
-    if total_orders == 0:
-        text = "📥 **Управление заявками**\n\nНовых или обрабатываемых заявок сейчас нет. Все заказы успешно закрыты! ✨"
-        from bot.keyboards.menu_kb import get_back_to_menu_keyboard
-        if isinstance(callback_or_message, CallbackQuery):
-            await callback_or_message.message.edit_text(text, reply_markup=get_back_to_menu_keyboard(to_manager=True), parse_mode="Markdown")
-        else:
-            await callback_or_message.answer(text, reply_markup=get_back_to_menu_keyboard(to_manager=True), parse_mode="Markdown")
-        return
-
-    # Запрашиваем один самый старый заказ для обработки
-    offset_value = (page - 1) * ORDERS_PER_PAGE
-    order_query = (
-        select(Order)
-        .where(Order.status.in_([OrderStatus.CREATED, OrderStatus.PROCESSED]))
-        .order_by(Order.created_at.asc())
-        .limit(ORDERS_PER_PAGE)
-        .offset(offset_value)
-    )
-    order_result = await session.execute(order_query)
-    order = order_result.scalar_one_or_none()
-
-    # Корректировка страницы, если заказ успели обработать параллельно
-    if not order and page > 1:
-        await send_admin_orders_page(callback_or_message, session, page=page-1)
-        return
-
-    has_next = (page * ORDERS_PER_PAGE) < total_orders
-
-    # Извлекаем досье покупателя для вывода контактов
-    buyer = await session.get(User, order.user_id)
-    buyer_username = f"@{buyer.username}" if buyer and buyer.username else f"ID: {order.user_id}"
-
-    status_labels = {
-        OrderStatus.CREATED: "🆕 Новый / Ожидает",
-        OrderStatus.PROCESSED: "⚙️ В обработке"
-    }
-
-    source_labels = {
-        "shop": "🏪 Покупка в магазине",
-        "chest": "📦 Выигрыш из сундука",
-        "giveaway": "🎉 Выигрыш в розыгрыше"
-    }
-
+async def render_manager_orders_page(
+    callback: CallbackQuery, 
+    page: int, 
+    db_session: AsyncSession
+):
+    """Строгая функция отрисовки заказов с постраничной пагинацией."""
+    limit = 5
+    offset = (page - 1) * limit
+    
+    # Считаем общее количество активных заявок мерча
+    count_q = select(func.count(Order.id))
+    total = (await db_session.execute(count_q)).scalar() or 0
+    
+    # Выгружаем список заказов для текущей страницы
+    orders_q = select(Order).order_by(
+        Order.created_at.desc()
+    ).limit(limit).offset(offset)
+    orders = (await db_session.execute(orders_q)).scalars().all()
+    
     text = (
-        f"📥 **Обработка заявок (Страница {page}/{total_orders})**\n\n"
-        f"🆔 **Заказ №:** `{order.id}`\n"
-        f"👤 **Покупатель:** {buyer_username} ({buyer.full_name if buyer else 'Имя скрыто'})\n"
-        f"🎁 **Предмет:** *{order.item_name}*\n"
-        f"📊 **Источник:** {source_labels.get(order.source, order.source)}\n"
-        f"📈 **Текущий статус:** {status_labels.get(order.status)}\n"
-        f"📅 **Дата создания:** {order.created_at.strftime('%d.%m.%Y %H:%M')}\n\n"
-        f"🚚 **Данные для доставки / Контакты:**\n_{order.delivery_data or 'Не указаны'}_"
+        f"📥 **Управление заявками и заказами мерча**\n\n"
+        f"Всего заявок в системе: **{total}** шт.\n"
+        f"Текущая страница: `{page}`\n\n"
+        f"👇 Нажмите на заказ для изменения его статуса или удаления:"
     )
+    
+    buttons = []
+    for o in orders:
+        status_emoji = "⏳" if o.status == "created" else "✅"
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"{status_emoji} Заказ #{o.id} | ID: {o.user_id}", 
+                callback_data=f"mg_order_view:{o.id}:{page}"
+            )
+        ])
+        
+    # Формируем навигационную панель стрелок
+    nav_row = []
+    if page > 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="⬅️ Назад", callback_data=f"mg_orders_page:{page-1}"
+            )
+        )
+    if page * limit < total:
+        nav_row.append(
+            InlineKeyboardButton(
+                text="Вперед ➡️", callback_data=f"mg_orders_page:{page+1}"
+            )
+        )
+    if nav_row:
+        buttons.append(nav_row)
+        
+    buttons.append([
+        InlineKeyboardButton(
+            text="↩️ Вернуться в корень админки", 
+            callback_data="main_menu_manager"
+        )
+    ])
+    
+    try:
+        await callback.message.edit_text(
+            text=text, 
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), 
+            parse_mode="Markdown"
+        )
+    except Exception:
+        await callback.answer()
 
-    reply_markup = get_admin_order_keyboard(order.id, page, has_next)
-
-    if isinstance(callback_or_message, CallbackQuery):
-        try:
-            await callback_or_message.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception:
-            await callback_or_message.answer()
-    else:
-        await callback_or_message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("mg_orders_page:"))
 async def process_manager_orders_page_click(
