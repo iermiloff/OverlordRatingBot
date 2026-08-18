@@ -7,7 +7,11 @@ from sqlalchemy import select, func, and_
 
 from config import settings
 from database.models import ShopItem, StockUnit
-from bot.states import ManagerShopItemSetup # Убедись, что класс обновлен в states.py
+from bot.states import (
+    ManagerShopItemSetup, 
+    ManagerStockLoad, 
+    ManagerShowcasePush
+)
 
 router = Router(name="manager_shop_inventory_router")
 logger = logging.getLogger(__name__)
