@@ -166,6 +166,7 @@ async def process_quiet_hours_input(message: Message, state: FSMContext):
 async def process_random_hours_input(
     message: Message, state: FSMContext, db_session: AsyncSession
 ):
+    """Финализация настройки минут: сохранение данных в SystemSettings."""
     if not message.text.strip().isdigit():
         await message.answer("❌ Введите целое число МИНУТ:")
         return
@@ -174,14 +175,25 @@ async def process_random_hours_input(
     quiet_h = data.get("quiet_h")
     random_h = int(message.text.strip())
     
+    # Записываем новые минуты сна и рандома напрямую в SystemSettings id=1
     sys_settings = await get_sys_settings(db_session)
     sys_settings.chest_quiet_hours = quiet_h
     sys_settings.chest_random_hours = random_h
     await db_session.commit()
     await state.clear()
     
-    from services.scheduler import calculate_next_chest_time
-    import asyncio
+    # ✅ ИСПРАВЛЕНО: Убран мёртвый импорт calculate_next_chest_time.
+    # Динамический воркер подхватит новые минуты из СУБД на следующем тике!
+    
+    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
+    await message.answer(
+        f"✅ Таймер изменен! Диапазон: от {quiet_h} до "
+        f"{quiet_h + random_h} минут.\n\n"
+        f"Планировщик автоматически применит эти настройки "
+        f"при следующем анализе активности! ⏱️",
+        reply_markup=get_back_to_menu_keyboard(to_manager=True)
+    )
+
     asyncio.create_task(calculate_next_chest_time())
     
     from bot.keyboards.menu_kb import get_back_to_menu_keyboard
