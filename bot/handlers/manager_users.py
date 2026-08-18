@@ -64,11 +64,11 @@ async def cmd_manager_users_list(callback: CallbackQuery, is_manager: bool, db_s
 
 @router.callback_query(F.data.startswith("mg_u_view:"))
 async def process_manager_user_view(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    """Карточка пользователя: скоринг рейтинга, бана и объема инвентаря ERP."""
     if not is_manager: return
     parts = callback.data.split(":")
-    user_id = int(parts)
-    page = int(parts)
+    # ✅ СТРОГО ИСПРАВЛЕНО: Добавлены индексы элементов списка
+    user_id = int(parts[1])
+    page = int(parts[2])
     
     user = await db_session.get(User, user_id)
     if not user:
@@ -115,10 +115,7 @@ async def process_manager_user_view(callback: CallbackQuery, is_manager: bool, d
 # --- ⚙️ УПРАВЛЕНИЕ БАНОМ И АДМИНСКИЙ ПРОСМОТР ИНВЕНТАРЯ ЮЗЕРА ---
 
 @router.callback_query(F.data.startswith("mg_u_ban_toggle:"))
-async def process_manager_user_ban_toggle(
-    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
-):
-    """Атомарное переключение статуса бана пользователя в системе."""
+async def process_manager_user_ban_toggle(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     parts = callback.data.split(":")
     user_id = int(parts[1])
@@ -134,10 +131,7 @@ async def process_manager_user_ban_toggle(
     await process_manager_user_view(callback, is_manager, db_session)
 
 @router.callback_query(F.data.startswith("mg_u_inv_list:"))
-async def process_manager_user_inventory_list(
-    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
-):
-    """Постраничный No-Code аудит инвентаря конкретного юзера для админа."""
+async def process_manager_user_inventory_list(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
     if not is_manager: return
     parts = callback.data.split(":")
     user_id = int(parts[1])
