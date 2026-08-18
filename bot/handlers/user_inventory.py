@@ -4,7 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
-
+from sqlalchemy.orm import joinedload
 from database.models import User, ShopItem, StockUnit
 
 router = Router(name="user_inventory_router")
@@ -33,9 +33,14 @@ async def cmd_user_inventory_main(message_or_query, db_session: AsyncSession, db
     total = (await db_session.execute(count_q)).scalar() or 0
     
     # Загружаем поштучные предметы с подгрузкой их мета-карточек ShopItem
-    units_q = select(StockUnit).where(
-        and_(StockUnit.owner_id == db_user.tg_id, StockUnit.status.in_(["sold", "won"]))
-    ).order_by(StockUnit.created_at.desc()).limit(limit).offset(offset)
+units_q = select(StockUnit).options(
+    joinedload(StockUnit.item)
+).where(
+    and_(
+        StockUnit.owner_id = db_user.tg_id, 
+        StockUnit.status.in_(["sold", "won"])
+    )
+).order_by(StockUnit.created_at.desc()).limit(limit).offset(offset)
     units = (await db_session.execute(units_q)).scalars().all()
     
     text = (
