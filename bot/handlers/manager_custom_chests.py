@@ -406,17 +406,28 @@ async def process_cc_manage_card(
 async def process_cc_delete(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
+    """Безопасное удаление сундука без мутации frozen-объектов Pydantic."""
     if not is_manager: return
     
-    chest_id = int(callback.data.split(":")[1])
-    
+    chest_id = int(callback.data.split(":"))
     chest = await db_session.get(CustomChest, chest_id)
+    
     if chest:
         await db_session.delete(chest)
         await db_session.commit()
-    await callback.answer("🗑️ Шаблон успешно стерт!", show_alert=True)
-    callback.data = "cc_main_menu"
-    await cmd_custom_chests_main(callback, is_manager, db_session)
+        
+    await callback.answer(
+        "🗑️ Шаблон кастомного сундука успешно стерт!", 
+        show_alert=True
+    )
+    
+    # ✅ ИСПРАВЛЕНО: Никаких callback.data = "cc_main_menu"!
+    # Мы вызываем рендеринг главного меню пагинации напрямую
+    await cmd_custom_chests_main(
+        callback=callback, 
+        is_manager=is_manager, 
+        db_session=db_session
+    )
 
 @router.callback_query(F.data.startswith("cc_add_r_rew:"))
 async def process_cc_add_r_rew(
