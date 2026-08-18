@@ -1,121 +1,92 @@
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, Float, DateTime, ForeignKey, Text
-from sqlalchemy.orm import declarative_base, relationship
 from datetime import datetime
-import enum
+from sqlalchemy import (
+    Column, Integer, BigInteger, String, 
+    Boolean, Float, DateTime, ForeignKey, Text
+)
+from sqlalchemy.orm import declarative_base, relationship
 
 Base = declarative_base()
 
-class OrderStatus(str, enum.Enum):
-    """Глобальное перечисление статусов обработки заказов и наград."""
-    CREATED = "created"      # Создан / ожидает менеджера
-    PROCESSED = "processed"  # Менеджер взял в работу
-    COMPLETED = "completed"  # Выдан / отправлен клиенту
-    REJECTED = "rejected"    # Отклонен менеджером
-
 class User(Base):
+    """Модель профиля участника кроссплатформенной экосистемы."""
     __tablename__ = "users"
     
-    tg_id = Column(BigInteger, primary_key=True)
-    username = Column(String(32), nullable=True)
+    tg_id = Column(BigInteger, primary_key=True) # ID в Telegram
+    discord_id = Column(BigInteger, nullable=True) # Изоляция под Discord!
+    
+    username = Column(String(64), nullable=True)
     full_name = Column(String(128), nullable=False)
-    current_rating = Column(Integer, default=0)
-    lifetime_rating = Column(Integer, default=0)
-    referrer_id = Column(BigInteger, nullable=True)
-    is_banned = Column(Boolean, default=False)
-    ban_until = Column(DateTime, nullable=True)
-    is_suspicious = Column(Boolean, default=False)
+    
+    current_rating = Column(Integer, default=0)    # Доступный баланс
+    lifetime_rating = Column(Integer, default=0)   # Исторический опыт
+    
+    is_suspicious = Column(Boolean, default=False) # Антифрод
     antifraud_reason = Column(String(256), nullable=True)
+    is_banned = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)
-    timezone = Column(String(64), default="UTC")
-
-    # Реляционные связи
-    inventory = relationship("Inventory", back_populates="user", cascade="all, delete-orphan")
+    
+    # Связь с инвентарем (купленными уникальными единицами)
+    owned_units = relationship("StockUnit", back_populates="owner")
 
 class ShopItem(Base):
+    """Мета-карточка товара/мерча в No-Code магазине."""
     __tablename__ = "shop_items"
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(128), nullable=False)
-    description = Column(String(512), nullable=True)
+    description = Column(Text, nullable=True)
     price = Column(Integer, nullable=False)
-    image_url = Column(String(256), nullable=True) # Ссылка на фото или GIF в Telegram
-    is_ticket = Column(Boolean, default=False)     # Флаг лотерейного билета
-    is_deleted = Column(Boolean, default=False)
+    image_url = Column(String(256), nullable=True)
+    
+    # Категории товара
+    is_ticket = Column(Boolean, default=False)     # Лотерейный билет
+    
+    # КРОССПЛАТФОРМЕННЫЙ ШЛЮЗ: где продается товар? ('all', 'tg', 'discord')
+    platform_target = Column(String(32), default="all", nullable=False)
+    
+    is_deleted = Column(Boolean, default=False)    # Мягкое удаление
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    # Связь с конкретными физическими единицами на складе
+    units = relationship(
+        "StockUnit", 
+        back_populates="item", 
+        cascade="all, delete-orphan"
+    )
 
-class Inventory(Base):
-    __tablename__ = "user_inventories"
+class StockUnit(Base):
+    """Поштучный учет каждой единицы товара (Склад / Витрина / Инвентарь)."""
+    __tablename__ = "stock_units"
     
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, ForeignKey("users.tg_id", ondelete="CASCADE"))
-    item_id = Column(Integer, ForeignKey("shop_items.id", ondelete="CASCADE"))
-    quantity = Column(Integer, default=1)
+    id = Column(Integer, primary_key=True, autoincrement=True) # Цифровой ID вещи!
+    item_id = Column(Integer, ForeignKey("shop_items.id", ondelete="CASCADE"), nullable=False)
     
-    user = relationship("User", back_populates="inventory")
-    item = relationship("ShopItem")
+    # Для промокодов/ключей — секретный текст. Для мерча — серийник или NULL
+    serial_or_promo = Column(String(512), nullable=True) 
+    
+    # Статусы: 'stock' (склад), 'showcase' (витрина), 'sold' (выдано/инвентарь), 'won' (лотерея)
+    status = Column(String(32), default="stock", nullable=False)
+    
+    # Кросплатформенный владелец: связываем по первичному ключу users (tg_id)
+    owner_id = Column(BigInteger, ForeignKey("users.tg_id", ondelete="SET NULL"), nullable=True)
+    
+    # ШЛЮЗ: Через какую платформу была куплена/выиграна вещь? ('tg', 'discord', 'giveaway')
+    purchase_source = Column(String(32), default="tg", nullable=False)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, onupdate=datetime.utcnow)
+    
+    item = relationship("ShopItem", back_populates="units")
+    owner = relationship("User", back_populates="owned_units")
 
 class ChestReward(Base):
+    """Пул наград автоматического сундука активности."""
     __tablename__ = "chest_rewards"
+    
     id = Column(Integer, primary_key=True, autoincrement=True)
-    reward_type = Column(String(32), nullable=False) # "rating" или "physical"
-    value = Column(String(128), nullable=False)
+    reward_type = Column(String(32), nullable=False) # 'rating' или 'item'
+    value = Column(String(256), nullable=False)      # Число монет или ID ShopItem!
     weight = Column(Float, default=1.0)
-
-class Giveaway(Base):
-    __tablename__ = "giveaways"
-    
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    reward_type = Column(String(32), nullable=False)      # "rating" или "physical"
-    reward_value = Column(String(128), nullable=False)     # Приз
-    winners_count = Column(Integer, default=1)            # Места
-    condition_type = Column(String(32), nullable=False)   # "combo"
-    condition_value = Column(String(128), nullable=False)  # "title_id:ticket_id"
-    
-    # Новые поля для планировщика времени
-    announce_at = Column(DateTime, nullable=False)        # Время публикации требований
-    finalize_at = Column(DateTime, nullable=False)        # Время автоматического финала
-    status = Column(String(32), default="created")        # "created", "announced", "finished"
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-class PromoChannel(Base):
-    """Модель партнерских каналов для обязательных подписок."""
-    __tablename__ = "promo_channels"
-    id = Column(BigInteger, primary_key=True)  # Telegram ID канала
-    invite_link = Column(String(256), nullable=False)
-    reward = Column(Integer, default=50)
-
-class ChatConfig(Base):
-    __tablename__ = "chats_config"
-    id = Column(BigInteger, primary_key=True)
-    title = Column(String(128), nullable=False)
-    is_active = Column(Boolean, default=True)
-    invite_link = Column(String(256), nullable=True)
-
-class SystemSettings(Base):
-    __tablename__ = "system_settings"
-    id = Column(Integer, primary_key=True, default=1)
-    chest_open_price = Column(Integer, default=0)
-    chest_min_title_id = Column(Integer, default=1)
-    chest_quiet_hours = Column(Integer, default=12)
-    chest_random_hours = Column(Integer, default=12)
-
-class Order(Base):
-    __tablename__ = "orders"
-    id = Column(Integer, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, nullable=False)
-    source = Column(String(32), nullable=False)
-    item_name = Column(String(128), nullable=False)
-    status = Column(String(32), nullable=False) # Хранит строковое значение OrderStatus
-    delivery_data = Column(String(512), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-class ActivityLog(Base):
-    __tablename__ = "activity_logs"
-    id = Column(BigInteger, primary_key=True, autoincrement=True)
-    user_id = Column(BigInteger, nullable=False)
-    chat_id = Column(BigInteger, nullable=False)
-    message_length = Column(Integer, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
 
 class CustomChest(Base):
     """Мета-карточка кастомного сундука ручного заброса."""
@@ -123,8 +94,8 @@ class CustomChest(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     name = Column(String(128), nullable=False)
-    description = Column(Text, nullable=False) # Текст анонса в чате
-    media_url = Column(String(256), nullable=True) # file_id картинки или GIF
+    description = Column(Text, nullable=False)
+    media_url = Column(String(256), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     
     rewards = relationship("CustomChestReward", back_populates="chest", cascade="all, delete-orphan")
@@ -135,8 +106,55 @@ class CustomChestReward(Base):
     
     id = Column(Integer, primary_key=True, autoincrement=True)
     chest_id = Column(Integer, ForeignKey("custom_chests.id", ondelete="CASCADE"), nullable=False)
-    reward_type = Column(String(32), nullable=False) # 'rating' или 'item'
-    value = Column(String(256), nullable=False)      # Номинал или название
-    weight = Column(Float, default=1.0)              # Шанс выпадения
+    reward_type = Column(String(32), nullable=False) # 'rating' или 'item' (из ShopItem)
+    value = Column(String(256), nullable=False)      
+    weight = Column(Float, default=1.0)
     
     chest = relationship("CustomChest", back_populates="rewards")
+
+class Giveaway(Base):
+    """Автоматические лотереи и розыгрыши."""
+    __tablename__ = "giveaways"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    reward_type = Column(String(32), nullable=False) # 'rating' или 'item' (из ShopItem)
+    reward_value = Column(String(128), nullable=False)
+    winners_count = Column(Integer, nullable=False)
+    condition_value = Column(String(128), nullable=False) # Минимальный титул/ранг
+    announce_at = Column(DateTime, nullable=False)
+    finalize_at = Column(DateTime, nullable=False)
+    status = Column(String(32), default="created", nullable=False) # 'created', 'announced', 'finished'
+
+class ChatConfig(Base):
+    """Конфигурация подключенных чатов и серверов."""
+    __tablename__ = "chat_configs"
+    
+    id = Column(BigInteger, primary_key=True) # Идентификатор чата (TG ID или Discord Guild ID)
+    title = Column(String(128), nullable=False)
+    
+    # ПЛАТФОРМА ЧАТА: 'tg' или 'discord'
+    platform = Column(String(32), default="tg", nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class ActivityLog(Base):
+    """Лог сообщений для кроссплатформенного скоринга опыта."""
+    __tablename__ = "activity_logs"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    user_id = Column(BigInteger, nullable=False) # TG ID или Discord User ID
+    chat_id = Column(BigInteger, nullable=False)
+    platform = Column(String(32), default="tg", nullable=False) # 'tg' / 'discord'
+    message_length = Column(Integer, default=0)
+    earned_rating = Column(Integer, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+class SystemSettings(Base):
+    """Глобальные No-Code лимиты автоматических сундуков."""
+    __tablename__ = "system_settings"
+    
+    id = Column(Integer, primary_key=True)
+    chest_open_price = Column(Integer, default=0)
+    chest_min_title_id = Column(Integer, default=1)
+    chest_quiet_hours = Column(Integer, default=15)  # Теперь это МИНУТЫ сна
+    chest_random_hours = Column(Integer, default=30) # Теперь это МИНУТЫ рандома
