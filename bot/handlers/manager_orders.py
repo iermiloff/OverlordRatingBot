@@ -84,13 +84,20 @@ async def send_admin_orders_page(callback_or_message, session: AsyncSession, pag
         await callback_or_message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("mg_orders_page:"))
-async def process_mg_orders_page(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager:
-        return
-    # ИСПРАВЛЕНО: берем точечный элемент по индексу 1
+async def process_manager_orders_page_click(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Перехват клика по кнопке Заказов с безопасным разбором страницы."""
+    if not is_manager: return
+    
+    # Извлекаем номер страницы из данных кнопки (например, из 'mg_orders_page:1')
     page = int(callback.data.split(":")[1])
-    await send_admin_orders_page(callback, db_session, page=page)
-    await callback.answer()
+    
+    await render_manager_orders_page(
+        callback=callback,
+        page=page,
+        db_session=db_session
+    )
 
 @router.callback_query(F.data.startswith("mg_ord_status:"))
 async def process_mg_order_status_change(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
