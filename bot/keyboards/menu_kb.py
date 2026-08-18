@@ -34,6 +34,10 @@ def get_manager_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="⚙️ Настройка Чатов, Промо и Времени", callback_data="mg_settings_panel")
         ],
         [
+            InlineKeyboardButton(text="🧰 Кастомные Сундуки", 
+                                 callback_data="cc_main_menu")
+        ],
+        [
             InlineKeyboardButton(text="📦 Настройка Сундуков", callback_data="mg_activities_panel"),
             InlineKeyboardButton(text="🎉 Настройка Розыгрышей", callback_data="mg_giveaways_panel")
         ]
