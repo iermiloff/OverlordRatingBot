@@ -426,12 +426,14 @@ async def process_cc_add_r_rew(
     await callback.answer()
 
 
+
 @router.callback_query(F.data.startswith("cc_send_now:"))
 async def process_cc_send_now(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
     if not is_manager: return
-    chest_id = int(callback.data.split(":"))
+    
+    chest_id = int(callback.data.split(":")[1])
     
     chest = await db_session.get(CustomChest, chest_id)
     from database.models import ChatConfig
@@ -450,7 +452,6 @@ async def process_cc_send_now(
     for chat in chats:
         if chest.media_url:
             try:
-                # 1. Пробуем отправить как обычное фото
                 await callback.bot.send_photo(
                     chat_id=chat.id, photo=chest.media_url, 
                     caption=chest.description, reply_markup=kb, 
@@ -458,7 +459,6 @@ async def process_cc_send_now(
                 )
             except Exception:
                 try:
-                    # 2. Фолбек: отправляем как GIF-анимацию
                     await callback.bot.send_animation(
                         chat_id=chat.id, animation=chest.media_url, 
                         caption=chest.description, reply_markup=kb, 
@@ -466,7 +466,6 @@ async def process_cc_send_now(
                     )
                 except Exception:
                     try:
-                        # 3. Крайний фолбек: шлем чистым текстом
                         await callback.bot.send_message(
                             chat_id=chat.id, text=chest.description, 
                             reply_markup=kb, parse_mode="Markdown"
