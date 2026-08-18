@@ -34,7 +34,7 @@ class ManagerStockLoad(StatesGroup):
 
 class ManagerShowcasePush(StatesGroup):
     waiting_for_count = State()
-    
+
 class UserPurchaseSetup(StatesGroup):
     waiting_for_delivery = State()
     waiting_for_confirm = State()
@@ -45,3 +45,8 @@ class ManagerGiveawaySetup(StatesGroup):
     waiting_for_winners = State()
     waiting_for_title = State()
     waiting_for_duration = State()
+
+class ManagerSettingsPromo(StatesGroup):
+    waiting_for_channel_id = State()
+    waiting_for_channel_name = State()
+    waiting_for_invite_link = State()
