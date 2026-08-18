@@ -315,18 +315,18 @@ async def process_cc_loop_stop(
     chest_id = data.get("cc_id")
     await state.clear()
     
-    callback.data = f"cc_manage:{chest_id}"
-    await process_cc_manage_card(callback, True, db_session)
+    await render_custom_chest_card(
+        callback=callback, 
+        chest_id=chest_id, 
+        db_session=db_session
+    )
 
-# --- 📦 КАРТОЧКА УПРАВЛЕНИЯ СУНДУКОМ ---
 
 @router.callback_query(F.data.startswith("cc_manage:"))
-async def process_cc_manage_card(
-    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+async def render_custom_chest_card(
+    callback: CallbackQuery, chest_id: int, db_session: AsyncSession
 ):
-    if not is_manager: return
-    chest_id = int(callback.data.split(":")[1])
-    
+    """Универсальная функция вывода карточки сундука (без мутации Pydantic)"""
     chest = await db_session.get(CustomChest, chest_id)
     if not chest:
         await callback.answer("❌ Сундук удален.", show_alert=True)
@@ -368,20 +368,17 @@ async def process_cc_manage_card(
 
     if chest.media_url:
         try:
-            # 1. Первая попытка: отправляем как фото
             await callback.message.answer_photo(
                 chest.media_url, caption=text, reply_markup=kb, 
                 parse_mode="Markdown"
             )
         except Exception:
-            # 2. Фолбек: если это анимация/GIF, Telegram выдаст ошибку, и мы шлем как GIF!
             try:
                 await callback.message.answer_animation(
                     chest.media_url, caption=text, reply_markup=kb, 
                     parse_mode="Markdown"
                 )
             except Exception:
-                # 3. Крайний случай: если файл сломался, шлем просто текстом
                 await callback.message.answer(
                     text, reply_markup=kb, parse_mode="Markdown"
                 )
@@ -390,6 +387,16 @@ async def process_cc_manage_card(
             text, reply_markup=kb, parse_mode="Markdown"
         )
     await callback.answer()
+
+@router.callback_query(F.data.startswith("cc_manage:"))
+async def process_cc_manage_card(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Обычный клик менеджера по сундуку из списка пагинации"""
+    if not is_manager: return
+    chest_id = int(callback.data.split(":")[1])
+    await render_custom_chest_card(callback, chest_id, db_session)
+
 
 
 @router.callback_query(F.data.startswith("cc_delete:"))
