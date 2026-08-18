@@ -1,212 +1,309 @@
+import logging
 from aiogram import Router, F
-from aiogram.types import Message, CallbackQuery, InputMediaPhoto
+from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
 from config import settings
-from database.models import User, ShopItem, Order, OrderStatus, Inventory
-from bot.keyboards.shop_kb import get_shop_item_keyboard, get_order_confirm_keyboard
-from bot.states import OrderCheckout
+from database.models import User, ShopItem, StockUnit
+from bot.states import UserPurchaseSetup # Убедись, что стейт есть в states.py
 
-router = Router(name="shop_user_router")
+router = Router(name="user_shop_router")
+logger = logging.getLogger(__name__)
 
-ITEMS_PER_PAGE = 1
+# --- 🛍️ ГЛАВНАЯ ВИТРИНА МАГАЗИНА ДЛЯ ЮЗЕРОВ ---
 
-async def send_shop_page(callback_or_message, session: AsyncSession, page: int = 1):
-    """Отрисовка карточки товара в магазине с поддержкой Фото/GIF и маркеров билетов."""
-    count_query = select(func.count(ShopItem.id)).where(ShopItem.is_deleted == False)
-    total_items = (await session.execute(count_query)).scalar()
-
-    if total_items == 0:
-        text = "🛒 **Магазин товаров**\n\nВ данный момент витрина пуста. Менеджеры добавят мерч в ближайшее время! ✨"
-        from bot.keyboards.menu_kb import get_back_to_menu_keyboard
-        if isinstance(callback_or_message, CallbackQuery):
-            await callback_or_message.message.answer(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="Markdown")
-            try: await callback_or_message.message.delete()
-            except Exception: pass
-        else:
-            await callback_or_message.answer(text, reply_markup=get_back_to_menu_keyboard(to_manager=False), parse_mode="Markdown")
-        return
-
-    offset_value = (page - 1) * ITEMS_PER_PAGE
-    item_query = (
-        select(ShopItem)
-        .where(ShopItem.is_deleted == False)
-        .order_by(ShopItem.id)
-        .limit(ITEMS_PER_PAGE)
-        .offset(offset_value)
+@router.message(F.text == "🛒 Магазин Мерча / Наград")
+@router.callback_query(F.data == "user_shop_main")
+@router.callback_query(F.data.startswith("user_shop_page:"))
+async def cmd_user_shop_main(message_or_query, db_session: AsyncSession):
+    """Вывод витрины товаров с фильтрацией под Telegram и подсчетом штук."""
+    page = 1
+    is_callback = isinstance(message_or_query, CallbackQuery)
+    
+    if is_callback and message_or_query.data.startswith("user_shop_page:"):
+        page = int(message_or_query.data.split(":")[1])
+        
+    limit = 4
+    offset = (page - 1) * limit
+    
+    # Считаем только неудаленные товары, доступные для Telegram (all или tg)
+    count_q = select(func.count(ShopItem.id)).where(
+        and_(ShopItem.is_deleted == False, ShopItem.platform_target.in_(["all", "tg"]))
     )
-    item = (await session.execute(item_query)).scalar_one_or_none()
-    has_next = (page * ITEMS_PER_PAGE) < total_items
-
-    ticket_label = "🎟️ [ЛОТЕРЕЙНЫЙ БИЛЕТ]" if item.is_ticket else "🎒 [МЕРЧ / ТОВАР]"
+    total = (await db_session.execute(count_q)).scalar() or 0
+    
+    items_q = select(ShopItem).where(
+        and_(ShopItem.is_deleted == False, ShopItem.platform_target.in_(["all", "tg"]))
+    ).order_by(ShopItem.price.asc()).limit(limit).offset(offset)
+    items = (await db_session.execute(items_q)).scalars().all()
+    
     text = (
-        f"{ticket_label}\n"
-        f"🛍️ **Товар:** {item.name}\n"
-        f"📝 **Описание:** {item.description or 'Нет описания'}\n\n"
-        f"💰 **Цена:** {settings.CURRENCY_EMOJI} {item.price} {settings.CURRENCY_NAME}\n"
-        f"🧭 _Страница {page} из {total_items}_"
+        "🛒 **Добро пожаловать в Магазин Наград Оверлорда!**\n\n"
+        "Вы можете обменять свой накопленный рейтинг активности на "
+        "ценные цифровые призы, лотерейные билеты или реальный мерч.\n\n"
+        f"Уникальных позиций на витрине: **{total}** шт."
     )
-
-    reply_markup = get_shop_item_keyboard(item.id, page, has_next, item.price)
-
-    # ЛОГИКА ВЫВОДА МЕДИАФАЙЛОВ
-    if isinstance(callback_or_message, CallbackQuery):
-        # Если это клик по кнопке «Вперед/Назад»
-        try:
-            if item.image_url:
-                # Если у товара есть картинка, отправляем её новым медиа-сообщением
-                await callback_or_message.message.answer_photo(
-                    photo=item.image_url, caption=text, reply_markup=reply_markup, parse_mode="Markdown"
-                )
-                await callback_or_message.message.delete()
-            else:
-                # Если картинки нет — перерисовываем старый текст
-                await callback_or_message.message.edit_text(text, reply_markup=reply_markup, parse_mode="Markdown")
-        except Exception:
-            # Защита от ошибок изменения типов сообщений Telegram
-            if item.image_url:
-                await callback_or_message.message.answer_photo(photo=item.image_url, caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-            else:
-                await callback_or_message.message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
-            try: await callback_or_message.message.delete()
-            except Exception: pass
+    
+    buttons = []
+    for item in items:
+        # Живой подсчет единиц, выставленных администрацией на Витрину
+        showcase_q = select(func.count(StockUnit.id)).where(
+            and_(StockUnit.item_id == item.id, StockUnit.status == "showcase")
+        )
+        available_qty = (await db_session.execute(showcase_q)).scalar() or 0
+        
+        # Если товар закончился, пишем [НЕТ В НАЛИЧИИ]
+        status_lbl = f"{item.price} {settings.CURRENCY_NAME} ({available_qty} шт)" if available_qty > 0 else "❌ НЕТ В НАЛИЧИИ"
+        
+        buttons.append([
+            InlineKeyboardButton(
+                text=f"▪️ {item.name} — {status_lbl}", 
+                callback_data=f"u_item_view:{item.id}:{page}"
+            )
+        ])
+        
+    # Пагинация стрелок
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"user_shop_page:{page-1}"))
+    if page * limit < total:
+        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"user_shop_page:{page+1}"))
+    if nav_row:
+        buttons.append(nav_row)
+        
+    buttons.append([InlineKeyboardButton(text="↩️ Вернуться в Личный Кабинет", callback_data="user_lk_main")])
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    if is_callback:
+        try: await message_or_query.message.delete()
+        except Exception: pass
+        await message_or_query.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+        await message_or_query.answer()
     else:
-        # Если зашли в магазин первый раз по кнопке меню
-        if item.image_url:
-            await callback_or_message.answer_photo(photo=item.image_url, caption=text, reply_markup=reply_markup, parse_mode="Markdown")
-        else:
-            await callback_or_message.answer(text, reply_markup=reply_markup, parse_mode="Markdown")
+        await message_or_query.answer(text, reply_markup=kb, parse_mode="Markdown")
 
-@router.callback_query(F.data.startswith("shop_page:"))
-async def process_shop_page(callback: CallbackQuery, db_session: AsyncSession):
-    page = int(callback.data.split(":")[1])
-    await send_shop_page(callback, db_session, page=page)
-    await callback.answer()
+# --- 🔎 КАРТОЧКА ТОВАРА ГЛАЗАМИ ПОЛЬЗОВАТЕЛЯ ---
 
-@router.callback_query(F.data.startswith("shop_buy:"))
-async def process_buy_click(callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext):
+@router.callback_query(F.data.startswith("u_item_view:"))
+async def process_user_item_view(callback: CallbackQuery, db_session: AsyncSession):
+    """Детальная карточка товара для юзера перед покупкой."""
     parts = callback.data.split(":")
-    item_id, page = int(parts[1]), int(parts[2])
-
+    item_id = int(parts[1])
+    page = int(parts[2])
+    
     item = await db_session.get(ShopItem, item_id)
     if not item or item.is_deleted:
-        await callback.answer("❌ Данный товар более недоступен.", show_alert=True)
-        await send_shop_page(callback, db_session, page=1)
+        await callback.answer("❌ Товар убран с витрины!", show_alert=True)
         return
+        
+    # Считаем доступные к покупке поштучные единицы
+    showcase_q = select(func.count(StockUnit.id)).where(
+        and_(StockUnit.item_id == item_id, StockUnit.status == "showcase")
+    )
+    qty = (await db_session.execute(showcase_q)).scalar() or 0
+    
+    text = (
+        f"🛍️ **Товар: {item.name}**\n\n"
+        f"💰 Стоимость: **{item.price}** {settings.CURRENCY_NAME}\n"
+        f"📦 В наличии: **{qty}** шт.\n\n"
+        f"📜 **Описание:**\n_{item.description or 'Нет описания.'}_"
+    )
+    
+    buttons = []
+    if qty > 0:
+        buttons.append([
+            InlineKeyboardButton(
+                text="💳 КУПИТЬ СЕЙЧАС", 
+                callback_data=f"u_buy_start:{item_id}:{page}"
+            )
+        ])
+        
+    buttons.append([
+        InlineKeyboardButton(
+            text="↩️ Вернуться на витрину", 
+            callback_data=f"user_shop_page:{page}"
+        )
+    ])
+    
+    try: await callback.message.delete()
+    except Exception: pass
 
+    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
+    if item.image_url:
+        await callback.message.answer_photo(
+            item.image_url, caption=text, reply_markup=kb, parse_mode="Markdown"
+        )
+    else:
+        await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
+    await callback.answer()
+
+# --- 💳 ТРАНЗАКЦИОННЫЙ ЗАПУСК ПОКУПКИ ---
+
+@router.callback_query(F.data.startswith("u_buy_start:"))
+async def process_user_buy_start(
+    callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext
+):
+    """Атомарная проверка баланса и запуск транзакции оформления."""
+    parts = callback.data.split(":")
+    item_id = int(parts[1])
+    page = int(parts[2])
+    
+    item = await db_session.get(ShopItem, item_id)
+    if not item or item.is_deleted:
+        await callback.answer("❌ Товар больше недоступен!", show_alert=True)
+        return
+        
+    # Проверка кошелька юзера
     if db_user.current_rating < item.price:
         await callback.answer(
-            f"❌ Недостаточно средств! Вам не хватает {item.price - db_user.current_rating} {settings.CURRENCY_NAME}", 
+            f"❌ Недостаточно средств! У вас {db_user.current_rating} поинтов.", 
             show_alert=True
         )
         return
-
-    # Если товар является БИЛЕТОМ — оформляем покупку мгновенно в 1 клик, минуя сбор ФИО/Адреса
-    if item.is_ticket:
-        db_user.current_rating -= item.price
         
-        # Проверяем, есть ли уже такой билет в инвентаре
-        inv_check = await db_session.execute(
-            select(Inventory).where(and_(Inventory.user_id == db_user.tg_id, Inventory.item_id == item.id))
-        )
-        inv_item = inv_check.scalar_one_or_none()
-        
-        if inv_item:
-            inv_item.quantity += 1
-        else:
-            inv_item = Inventory(user_id=db_user.tg_id, item_id=item.id, quantity=1)
-            db_session.add(inv_item)
-            
-        await db_session.commit()
-        await callback.answer(f"🎟️ Билет '{item.name}' успешно куплен и добавлен в ваш инвентарь!", show_alert=True)
-        await send_shop_page(callback, db_session, page=page)
+    # Ищем ровно одну свободную единицу на витрине
+    unit_q = select(StockUnit).where(
+        and_(StockUnit.item_id == item_id, StockUnit.status == "showcase")
+    ).limit(1)
+    unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+    
+    if not unit:
+        await callback.answer("❌ Увы! Этот товар только что раскупили!", show_alert=True)
         return
+        
+    # Сохраняем мета-данные сделки в кэш FSM
+    await state.update_data(buy_item_id=item_id, buy_unit_id=unit.id, buy_page=page)
+    
+    if unit.serial_or_promo:
+        # Режим А: Это цифровой ключ/промокод — оформляем мгновенно без адреса
+        await state.set_state(UserPurchaseSetup.waiting_for_confirm) # Переводим на финал
+        confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="✅ Подтвердить покупку", callback_data="u_buy_confirm_digital"),
+                InlineKeyboardButton(text="❌ Отмена", callback_data=f"u_item_view:{item_id}:{page}")
+            ]
+        ])
+        await callback.message.answer(
+            f"📦 **Оформление цифрового товара: {item.name}**\n\n"
+            f"С вашего баланса будет списано **{item.price}** поинтов. "
+            f"Вы мгновенно получите лицензионный ключ/промокод прямо в этот чат.",
+            reply_markup=confirm_kb
+        )
+    else:
+        # Режим Б: Это физический мерч — запрашиваем данные доставки
+        await state.set_state(UserPurchaseSetup.waiting_for_delivery)
+        await callback.message.answer(
+            f"🎒 **Оформление физического мерча: {item.name}**\n\n"
+            f"Пожалуйста, введите **данные для доставки/связи** "
+            f"(ФИО, город, номер СДЭК/Почты или юзернейм для связи менеджеру):"
+        )
+    await callback.answer()
 
-    # Для обычных товаров запускаем стандартный FSM-процесс доставки
-    await state.set_state(OrderCheckout.waiting_for_delivery_data)
-    await state.update_data(buy_item_id=item.id, buy_item_price=item.price)
+# --- 🏁 ФИНАЛИЗАЦИЯ И ПОДТВЕРЖДЕНИЕ ПОКУПКИ ERP ---
 
+@router.callback_query(F.data == "u_buy_confirm_digital")
+async def process_user_buy_confirm_digital(
+    callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext
+):
+    """Мгновенное атомарное оформление цифрового товара/промокода."""
+    data = await state.get_data()
+    item_id = data.get("buy_item_id")
+    unit_id = data.get("buy_unit_id")
+    
+    # Повторно извлекаем сущности внутри транзакции
+    item = await db_session.get(ShopItem, item_id)
+    unit = await db_session.get(StockUnit, unit_id)
+    
+    if not unit or unit.status != "showcase" or item.is_deleted:
+        await callback.answer("❌ Ошибка! Товар уже недоступен.", show_alert=True)
+        await state.clear()
+        return
+        
+    if db_user.current_rating < item.price:
+        await callback.answer("❌ Недостаточно поинтов!", show_alert=True)
+        await state.clear()
+        return
+        
+    # АТОМАРНАЯ СДЕЛКА СУБД: Списание и привязка поштучного ID
+    db_user.current_rating -= item.price
+    unit.status = "sold"
+    unit.owner_id = db_user.tg_id
+    unit.purchase_source = "tg"
+    
+    await db_session.commit()
+    await state.clear()
+    
     await callback.message.answer(
-        f"🛒 **Оформление заказа: {item.name}**\n\n"
-        f"Пожалуйста, введите ваши контактные данные одной строкой:\n"
-        f"👉 _ФИО, город, номер телефона, адрес или способ связи с вами_.",
-        parse_mode="Markdown"
+        f"🎉 **Покупка успешно завершена!**\n\n"
+        f"🎒 Вы приобрели: **{item.name}**\n"
+        f"💰 Списано: {item.price} поинтов.\n\n"
+        f"🔑 **Ваш цифровой ключ/промокод:**\n"
+        f"<code>{unit.serial_or_promo}</code>",
+        parse_mode="HTML"
     )
     await callback.answer()
 
-@router.message(OrderCheckout.waiting_for_delivery_data)
-async def process_delivery_input(message: Message, state: FSMContext, db_session: AsyncSession):
+@router.message(F.state == "UserPurchaseSetup:waiting_for_delivery")
+async def process_user_buy_delivery_save(
+    message: Message, db_user: User, db_session: AsyncSession, state: FSMContext
+):
+    """Оформление физического мерча с сохранением контактов доставки."""
+    delivery_text = message.text.strip()
     data = await state.get_data()
     item_id = data.get("buy_item_id")
+    unit_id = data.get("buy_unit_id")
     
     item = await db_session.get(ShopItem, item_id)
-    if not item or item.is_deleted:
-        await message.answer("❌ Товар исчез из магазина. Оформление отменено.")
+    unit = await db_session.get(StockUnit, unit_id)
+    
+    if not unit or unit.status != "showcase" or item.is_deleted:
+        await message.answer("❌ Ошибка! Товар успели забрать или убрать с витрины.")
         await state.clear()
         return
-
-    await state.update_data(delivery_text=message.text.strip())
-
-    text = (
-        f"📝 **Проверьте корректность данных заказа:**\n\n"
-        f"📦 **Товар:** {item.name}\n"
-        f"💰 **Списание баланса:** {item.price} {settings.CURRENCY_NAME}\n"
-        f"🚚 **Данные для доставки:**\n_{message.text}_\n\n"
-        f"При нажатии на кнопку подтверждения, рейтинг спишется, а заявка упадет менеджеру."
-    )
-    await message.answer(text, reply_markup=get_order_confirm_keyboard(item.id), parse_mode="Markdown")
-
-@router.callback_query(F.data.startswith("order_confirm:"))
-async def process_order_confirm(callback: CallbackQuery, db_user: User, db_session: AsyncSession, state: FSMContext):
-    data = await state.get_data()
-    delivery_text = data.get("delivery_text")
-    
-    item_id = int(callback.data.split(":")[1])
-    item = await db_session.get(ShopItem, item_id)
-    
-    if not item or item.is_deleted:
-        await callback.answer("❌ Товар удален.", show_alert=True)
-        await state.clear()
-        return
-
+        
     if db_user.current_rating < item.price:
-        await callback.answer("❌ Недостаточно рейтинга!", show_alert=True)
+        await message.answer("❌ Недостаточно поинтов на балансе!")
         await state.clear()
         return
-
+        
+    # АТОМАРНАЯ СДЕЛКА СУБД: Списание, привязка владельца и сохранение данных
     db_user.current_rating -= item.price
-
-    new_order = Order(
-        user_id=db_user.tg_id, source="shop", item_name=item.name,
-        status=OrderStatus.CREATED, delivery_data=delivery_text
-    )
-    db_session.add(new_order)
+    unit.status = "sold"
+    unit.owner_id = db_user.tg_id
+    unit.purchase_source = "tg"
+    
+    # Записываем контакты прямо в серийное поле единицы для No-Code истории
+    unit.serial_or_promo = f"[ДОСТАВКА]: {delivery_text}"
+    
     await db_session.commit()
     await state.clear()
-
-    # Оповещаем менеджеров
+    
+    await message.answer(
+        f"🎉 **Заявка на мерч успешно оформлена!**\n\n"
+        f"🎒 Товар: **{item.name}**\n"
+        f"💰 Списано: {item.price} поинтов.\n\n"
+        f"Модераторы свяжутся с вами. Проверить статус "
+        f"и ID предмета можно в вашем Инвентаре."
+    )
+    
+    # Алерт менеджерам о новой заявке на мерч
     for manager_id in settings.managers_list:
         try:
-            await callback.bot.send_message(
+            await message.bot.send_message(
                 chat_id=manager_id,
-                text=f"📥 **Новый заказ мерча!**\n\n👤 Покупатель: @{db_user.username or db_user.tg_id}\n📦 Товар: *{item.name}*",
+                text=f"🛍️ **Новый заказ мерча [ERP Склад]**\n\n"
+                     f"👤 Покупатель: @{db_user.username or db_user.tg_id}\n"
+                     f"📦 Товар: *{item.name}* (Единица ID: {unit.id})\n"
+                     f"📋 **Контакты:**\n_{delivery_text}_",
                 parse_mode="Markdown"
             )
         except Exception: pass
 
-    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
-    await callback.message.edit_text(
-        "🎉 **Заказ успешно оформлен!**\nМенеджер свяжется с вами для отправки мерча.",
-        reply_markup=get_back_to_menu_keyboard(to_manager=False)
-    )
-    await callback.answer()
-
-@router.callback_query(F.data == "order_cancel")
-async def process_order_cancel(callback: CallbackQuery, state: FSMContext):
+@router.callback_query(F.data == "cc_cancel")
+async def process_purchase_cancel(callback: CallbackQuery, state: FSMContext):
     await state.clear()
-    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
-    await callback.message.edit_text("❌ Оформление заказа отменено.", reply_markup=get_back_to_menu_keyboard(to_manager=False))
+    await callback.message.edit_text("❌ Оформление покупки отменено.")
     await callback.answer()
 
