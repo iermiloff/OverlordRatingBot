@@ -1,6 +1,6 @@
 from aiogram import Router
 
-# Импортируем все изолированные роутеры из текущего пакета
+# Импортируем только живые и актуальные роутеры Беты
 from .common import router as common_router
 from .user_lk import router as user_lk_router
 from .shop_user import router as shop_user_router
@@ -8,7 +8,6 @@ from .user_tasks import router as user_tasks_router
 from .user_inventory import router as user_inventory_router
 from .manager_users import router as manager_users_router
 from .manager_shop import router as manager_shop_router
-from .manager_orders import router as manager_orders_router
 from .manager_antifraud import router as manager_antifraud_router
 from .manager_activities import router as manager_activities_router
 from .manager_giveaways import router as manager_giveaways_router
@@ -28,12 +27,13 @@ def get_main_router() -> Router:
     main_router.include_router(user_inventory_router)
     main_router.include_router(manager_users_router)
     main_router.include_router(manager_shop_router)
-    main_router.include_router(manager_orders_router)
     main_router.include_router(manager_antifraud_router)
     main_router.include_router(manager_activities_router)
     main_router.include_router(manager_giveaways_router)
     main_router.include_router(manager_settings_router)
     main_router.include_router(custom_chests_router)
+    
+    # Хэндлер активности чатов — строго в самый конец цепочки
     main_router.include_router(chat_activity_router)
     
     return main_router
