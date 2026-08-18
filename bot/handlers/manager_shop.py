@@ -269,7 +269,7 @@ async def process_mg_stock_load_start(callback: CallbackQuery, is_manager: bool,
     )
     await callback.answer()
 
-@router.message(F.state == "ManagerStockLoad:waiting_for_units")
+@router.message(StateFilter(ManagerStockLoad.waiting_for_units))
 async def process_mg_stock_load_save(message: Message, state: FSMContext, db_session: AsyncSession):
     data = await state.get_data()
     item_id = data.get("load_item_id")
@@ -311,7 +311,7 @@ async def process_mg_showcase_push_start(callback: CallbackQuery, is_manager: bo
     await callback.answer()
 
 
-@router.message(F.state == "ManagerShowcasePush:waiting_for_count")
+@router.message(StateFilter(ManagerShowcasePush.waiting_for_count))
 async def process_mg_showcase_push_save(message: Message, state: FSMContext, db_session: AsyncSession):
     if not message.text.strip().isdigit():
         await message.answer("❌ Введите целое число:")
@@ -322,7 +322,6 @@ async def process_mg_showcase_push_save(message: Message, state: FSMContext, db_
     item_id = data.get("push_item_id")
     page = data.get("push_page")
     
-    # Извлекаем строго свободные единицы со Склада
     units_q = select(StockUnit).where(
         and_(StockUnit.item_id == item_id, StockUnit.status == "stock")
     ).limit(count_to_push)
@@ -332,7 +331,6 @@ async def process_mg_showcase_push_save(message: Message, state: FSMContext, db_
         await message.answer(f"❌ На складе недостаточно товара! Доступно всего: **{len(units)}** шт.")
         return
         
-    # Переводим в статус витрины
     for u in units:
         u.status = "showcase"
         
