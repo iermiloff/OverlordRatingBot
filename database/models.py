@@ -144,6 +144,7 @@ class ChatConfig(Base):
     
     id = Column(BigInteger, primary_key=True) # Идентификатор чата (TG ID или Discord Guild ID)
     title = Column(String(128), nullable=False)
+    invite_link = Column(String(256), nullable=True) 
     
     # ПЛАТФОРМА ЧАТА: 'tg' или 'discord'
     platform = Column(String(32), default="tg", nullable=False)
