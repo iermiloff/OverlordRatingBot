@@ -7,7 +7,7 @@ def get_user_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="🛍️ Магазин товаров", callback_data="shop_page:1")
         ],
         [
-          #  InlineKeyboardButton(text="🤝 Партнерка", callback_data="user_referrals"),
+            InlineKeyboardButton(text="🤝 Партнерка", callback_data="user_referrals"),
             InlineKeyboardButton(text="🎖️ Список титулов", callback_data="user_titles")
         ],
         [
@@ -27,7 +27,7 @@ def get_manager_inline_menu() -> InlineKeyboardMarkup:
             InlineKeyboardButton(text="📦 Настройка магазина", callback_data="mg_shop_back")
         ],
         [
-            InlineKeyboardButton(text="📥 Заявки и Заказы (ERP)", callback_data="mg_users_page:1"),
+            InlineKeyboardButton(text="📥 Заявки и Заказы (ERP)", callback_data="mg_orders_queue:1"),
             InlineKeyboardButton(text="🔒 Антифрод-система", callback_data="af_page:1")
         ],
         [
