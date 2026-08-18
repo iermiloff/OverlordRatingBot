@@ -37,3 +37,14 @@ class ManagerGiveawaySetup(StatesGroup):
     waiting_for_condition_value = State()
     waiting_for_announce_time = State()  # Шаг для времени анонса
     waiting_for_finalize_time = State()  # Шаг для времени финала
+
+class ManagerCustomChestSetup(StatesGroup):
+    waiting_for_name = State()
+    waiting_for_description = State()
+    waiting_for_media = State()
+
+class ManagerCustomRewardSetup(StatesGroup):
+    waiting_for_type = State()
+    waiting_for_value = State()
+    waiting_for_weight = State()
+    waiting_for_next_decision = State()
