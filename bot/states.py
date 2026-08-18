@@ -22,7 +22,6 @@ class ManagerCustomRewardSetup(StatesGroup):
     waiting_for_weight = State()
     waiting_for_next_decision = State()
 
-# ✅ ДОБАВЛЕНО: Группа состояний для создания карточки ShopItem
 class ManagerShopItemSetup(StatesGroup):
     waiting_for_name = State()
     waiting_for_description = State()
@@ -30,16 +29,19 @@ class ManagerShopItemSetup(StatesGroup):
     waiting_for_platform = State()
     waiting_for_image = State()
 
-# ✅ ДОБАВЛЕНО: Группа состояний для заправки серийников/мерча на склад
 class ManagerStockLoad(StatesGroup):
     waiting_for_units = State()
 
-# ✅ ДОБАВЛЕНО: Группа состояний для вывода товаров на витрину
 class ManagerShowcasePush(StatesGroup):
     waiting_for_count = State()
-
-# ✅ ДОБАВЛЕНО: Группа состояний для оформления покупки пользователем
+    
 class UserPurchaseSetup(StatesGroup):
     waiting_for_delivery = State()
     waiting_for_confirm = State()
 
+class ManagerGiveawaySetup(StatesGroup):
+    waiting_for_type = State()
+    waiting_for_value = State()
+    waiting_for_winners = State()
+    waiting_for_title = State()
+    waiting_for_duration = State()
