@@ -241,11 +241,18 @@ async def save_shop_item_to_db(state: FSMContext, session: AsyncSession, img_id:
 async def process_item_image_input(message: Message, state: FSMContext, db_session: AsyncSession):
     img_id = message.photo[-1].file_id
     await save_shop_item_to_db(state, db_session, img_id)
+
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Вернуться на Склад ERP", callback_data="mg_stock_page:1")]
+    ])
     await message.answer("✅ Карточка товара создана! Проверьте её в списке склада.")
 
 @router.callback_query(ManagerShopItemSetup.waiting_for_image, F.data == "mg_skip_photo")
 async def process_item_skip_photo(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     await save_shop_item_to_db(state, db_session, None)
+    back_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📦 Вернуться на Склад ERP", callback_data="mg_stock_page:1")]
+    ])
     await callback.message.answer("✅ Карточка товара создана (без фото)!")
     await callback.answer()
 
