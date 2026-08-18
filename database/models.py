@@ -117,3 +117,26 @@ class ActivityLog(Base):
     message_length = Column(Integer, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
 
+class CustomChest(Base):
+    """Мета-карточка кастомного сундука ручного заброса."""
+    __tablename__ = "custom_chests"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(128), nullable=False)
+    description = Column(Text, nullable=False) # Текст анонса в чате
+    media_url = Column(String(256), nullable=True) # file_id картинки или GIF
+    created_at = Column(DateTime, default=datetime.utcnow)
+    
+    rewards = relationship("CustomChestReward", back_populates="chest", cascade="all, delete-orphan")
+
+class CustomChestReward(Base):
+    """Пул наград конкретного кастомного сундука."""
+    __tablename__ = "custom_chest_rewards"
+    
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    chest_id = Column(Integer, ForeignKey("custom_chests.id", ondelete="CASCADE"), nullable=False)
+    reward_type = Column(String(32), nullable=False) # 'rating' или 'item'
+    value = Column(String(256), nullable=False)      # Номинал или название
+    weight = Column(Float, default=1.0)              # Шанс выпадения
+    
+    chest = relationship("CustomChest", back_populates="rewards")
