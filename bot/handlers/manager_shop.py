@@ -250,15 +250,16 @@ async def process_item_skip_photo(callback: CallbackQuery, state: FSMContext, db
 async def process_mg_stock_load_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     parts = callback.data.split(":")
-    item_id = int(parts)
-    page = int(parts)
+    # ✅ СТРОГО ИСПРАВЛЕНО: Добавлены индексы для извлечения строк из списка сплита
+    item_id = int(parts[1])
+    page = int(parts[2])
     
     await state.update_data(load_item_id=item_id, load_page=page)
-    from bot.states import ManagerStockLoad # Убедись, что стейт добавлен в states.py
+    from bot.states import ManagerStockLoad
     await state.set_state(ManagerStockLoad.waiting_for_units)
     
     await callback.message.answer(
-        "📥 **Поштучная заправка Склада [ERP]**\n\n"
+        "📦 **Поштучная заправка Склада [ERP]**\n\n"
         "Отправьте количество штук для мерча (целое число).\n"
         "Либо пришлите **список промокодов/ключей** (каждый код с новой строки):"
     )
@@ -273,13 +274,11 @@ async def process_mg_stock_load_save(message: Message, state: FSMContext, db_ses
     
     added_count = 0
     if text.isdigit():
-        # Режим 1: Обычный вещевой мерч/физический товар
         for _ in range(int(text)):
             unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=None)
             db_session.add(unit)
             added_count += 1
     else:
-        # Режим 2: Цифровые промокоды/ключи (построчный разбор)
         codes = [c.strip() for c in text.split("\n") if c.strip()]
         for code in codes:
             unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=code)
@@ -291,20 +290,22 @@ async def process_mg_stock_load_save(message: Message, state: FSMContext, db_ses
     
     await message.answer(f"✅ Успешно оприходовано на Склад: **{added_count}** единиц товара!")
 
-# --- 🛍️ АТОМАРНЫЙ ПЕРЕНОС ТОВАРОВ НА ВИТРИНУ ПУБЛИЧНЫХ ПРОДАЖ ---
+# --- АТОМАРНЫЙ ПЕРЕНОС ТОВАРОВ НА ВИТРИНУ ПУБЛИЧНЫХ ПРОДАЖ ---
 
 @router.callback_query(F.data.startswith("mg_showcase_push:"))
 async def process_mg_showcase_push_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     if not is_manager: return
     parts = callback.data.split(":")
-    item_id = int(parts)
-    page = int(parts)
+    # ✅ СТРОГО ИСПРАВЛЕНО: Добавлены индексы для извлечения строк из списка сплита
+    item_id = int(parts[1])
+    page = int(parts[2])
     
     await state.update_data(push_item_id=item_id, push_page=page)
     from bot.states import ManagerShowcasePush
     await state.set_state(ManagerShowcasePush.waiting_for_count)
-    await callback.message.answer("🛍️ Введите **количество единиц**, которое нужно перенести со Склада на Витрину:")
+    await callback.message.answer("📥 Введите **количество единиц**, которое нужно перенести со Склада на Витрину:")
     await callback.answer()
+
 
 @router.message(F.state == "ManagerShowcasePush:waiting_for_count")
 async def process_mg_showcase_push_save(message: Message, state: FSMContext, db_session: AsyncSession):
