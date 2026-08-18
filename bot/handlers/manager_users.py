@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 
 from database.models import User, ShopItem, StockUnit
+from bot.states import ManagerUserWalletEdit
 
 router = Router(name="manager_users_router")
 logger = logging.getLogger(__name__)
