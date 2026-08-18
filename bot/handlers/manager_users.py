@@ -4,7 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
-
+from config import settings
 from database.models import User, ShopItem, StockUnit
 from bot.states import ManagerUserWalletEdit
 
