@@ -13,7 +13,7 @@ from bot.keyboards.manager_activities_kb import (
     get_reward_type_keyboard,
     get_titles_choice_keyboard
 )
-
+opened_chests_cache = set()
 router = Router(name="manager_activities_router")
 
 async def get_sys_settings(session: AsyncSession) -> SystemSettings:
@@ -280,42 +280,68 @@ async def process_user_open_chest(
     callback: CallbackQuery, db_user: User, db_session: AsyncSession
 ):
     sys_settings = await get_sys_settings(db_session)
+    msg_id = callback.message.message_id
+
+    # 1. МГНОВЕННАЯ АТОМАРНАЯ ПРОВЕРКА БЛОКИРОВКИ (ЗАЩИТА ОТ RACE CONDITION)
+    if msg_id in opened_chests_cache:
+        await callback.answer(
+            "❌ Ой! Кто-то оказался быстрее тебя и уже забрал этот сундук!", 
+            show_alert=True
+        )
+        return
+
+    # Проверка баланса кошелька
     if db_user.current_rating < sys_settings.chest_open_price:
         await callback.answer(
             f"❌ Недостаточно средств! Цена: {sys_settings.chest_open_price}.", 
             show_alert=True
         )
         return
+
+    # Проверка ограничений по рангу
     titles = settings.parsed_titles
     user_title_id = 1
     for t in sorted(titles.values(), key=lambda x: x.min_rating, reverse=True):
         if db_user.lifetime_rating >= t.min_rating:
             user_title_id = t.id
             break
+
     if user_title_id < sys_settings.chest_min_title_id:
         req_info = titles.get(sys_settings.chest_min_title_id)
         req_name = req_info.name if req_info else "Продвинутый"
         await callback.answer(
-            f" Доступ ограничен! Нужен титул от '{req_name}' и выше.", 
+            f"🔒 Доступ ограничен! Нужен титул от '{req_name}' и выше.", 
             show_alert=True
         )
         return
+
+    # 2. ЖЕСТКАЯ БЛОКИРОВКА: Если проверки прошли, мгновенно бронируем сундук!
+    opened_chests_cache.add(msg_id)
+
     try:
+        # Пытаемся убрать кнопку с экрана
         await callback.message.edit_text(
-            f" **Секретный сундук успешно открыт!** \n\n"
-            f" Счастливчик: {callback.from_user.mention_html()}\n"
-            f" Награда выдана в личный кабинет победителя!",
+            f"🎁 **Секретный сундук успешно открыт!** 🎁\n\n"
+            f"👤 Счастливчик: {callback.from_user.mention_html()}\n"
+            f"📥 Награда выдана в личный кабинет победителя!",
             reply_markup=None, parse_mode="HTML"
         )
     except Exception:
-        await callback.answer(" Ой! Кто-то оказался быстрее тебя!", show_alert=True)
+        # Если Telegram вернул ошибку (значит клики совпали идеально), снимаем бронь и выходим
+        if msg_id in opened_chests_cache:
+            opened_chests_cache.discard(msg_id)
+        await callback.answer(
+            "❌ Ой! Кто-то оказался быстрее тебя!", show_alert=True
+        )
         return
-        
+
+    # 3. НАЧИСЛЕНИЕ НАГРАДЫ (СТРОГО ДЛЯ ЕДИНСТВЕННОГО ПОБЕДИТЕЛЯ)
     if sys_settings.chest_open_price > 0:
         db_user.current_rating -= sys_settings.chest_open_price
         
     rewards_result = await db_session.execute(select(ChestReward))
     rewards = rewards_result.scalars().all()
+    
     if not rewards:
         base_rating = 15
         db_user.current_rating += base_rating
@@ -327,11 +353,14 @@ async def process_user_open_chest(
                 text=f"🎁 Выигрыш: +{base_rating} {settings.CURRENCY_NAME}."
             )
         except Exception: pass
+        await callback.answer()
         return
         
     population = [r for r in rewards]
     weights = [r.weight for r in rewards]
     win_list = random.choices(population, weights=weights, k=1)
+    
+    # ИСПРАВЛЕНО: Извлекаем единственный объект ChestReward из списка
     win_reward = win_list[0]
     
     if str(win_reward.reward_type) == "rating":
@@ -342,14 +371,15 @@ async def process_user_open_chest(
         try: 
             await callback.bot.send_message(
                 chat_id=db_user.tg_id, 
-                text=f"💎 Выигрыш: +{amount} {settings.CURRENCY_NAME}!"
+                text=f"💎 Твой выигрыш: +{amount} {settings.CURRENCY_NAME}!"
             )
         except Exception: pass
     else:
         new_order = Order(
             user_id=db_user.tg_id, source="chest", 
             item_name=f"[СУНДУК] {win_reward.value}",
-            status=OrderStatus.CREATED.value, delivery_data="Выиграно в сундуке."
+            status=OrderStatus.CREATED.value, 
+            delivery_data="Выиграно в сундуке чата."
         )
         db_session.add(new_order)
         await db_session.commit()
@@ -361,6 +391,7 @@ async def process_user_open_chest(
                 parse_mode="Markdown"
             )
         except Exception: pass
+        
         for manager_id in settings.managers_list:
             try:
                 await callback.bot.send_message(
@@ -370,5 +401,6 @@ async def process_user_open_chest(
                     parse_mode="Markdown"
                 )
             except Exception: pass
+            
     await callback.answer()
 
