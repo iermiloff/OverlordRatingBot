@@ -175,15 +175,15 @@ async def process_random_hours_input(
     quiet_h = data.get("quiet_h")
     random_h = int(message.text.strip())
     
-    # Записываем новые минуты сна и рандома напрямую в SystemSettings id=1
+    # Записываем новые минуты сна и рандома напрямую в SystemSettings
     sys_settings = await get_sys_settings(db_session)
     sys_settings.chest_quiet_hours = quiet_h
     sys_settings.chest_random_hours = random_h
     await db_session.commit()
     await state.clear()
     
-    # ✅ ИСПРАВЛЕНО: Убран мёртвый импорт calculate_next_chest_time.
-    # Динамический воркер подхватит новые минуты из СУБД на следующем тике!
+    # ✅ ЖЕСТКО ИСПРАВЛЕНО: Полностью удален вызов asyncio.create_task
+    # Динамический планировщик сам подхватит изменения на следующем минутном тике!
     
     from bot.keyboards.menu_kb import get_back_to_menu_keyboard
     await message.answer(
@@ -194,13 +194,6 @@ async def process_random_hours_input(
         reply_markup=get_back_to_menu_keyboard(to_manager=True)
     )
 
-    asyncio.create_task(calculate_next_chest_time())
-    
-    from bot.keyboards.menu_kb import get_back_to_menu_keyboard
-    await message.answer(
-        f"✅ Таймер изменен! Диапазон: от {quiet_h} до {quiet_h + random_h} минут.",
-        reply_markup=get_back_to_menu_keyboard(to_manager=True)
-    )
 
 @router.callback_query(F.data == "act_set_price")
 async def process_set_price_start(
