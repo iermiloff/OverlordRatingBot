@@ -68,17 +68,27 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
         nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"u_inv_page:{page-1}"))
     if page * limit < total:
         nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"u_inv_page:{page+1}"))
+    
     if nav_row:
         buttons.append(nav_row)
         
-    buttons.append([InlineKeyboardButton(text="↩️ В главное меню ЛК", callback_data="user_lk_main")])
+    buttons.append([
+        InlineKeyboardButton(text="↩️ Вернуться в меню ЛК", callback_data="user_lk_main")
+    ])
     
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    if is_callback:
-        try: await message_or_query.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-        except Exception: pass
-    else:
-        await message_or_query.answer(text, reply_markup=kb, parse_mode="Markdown")
+    reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
+    
+    try:
+        await callback.message.edit_text(
+            text=text,
+            reply_markup=reply_markup,
+            parse_mode="Markdown"
+        )
+    except Exception:
+        pass
+        
+    await callback.answer()
+
 
 @router.callback_query(F.data.startswith("u_inv_view:"))
 async def process_user_inventory_view_click(
