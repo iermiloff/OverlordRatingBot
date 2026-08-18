@@ -63,7 +63,7 @@ async def show_user_chats(callback: CallbackQuery, db_session: AsyncSession):
 async def show_user_referrals(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
     """Выводит данные реферальной системы пользователя."""
     bot_info = await callback.bot.get_me()
-    ref_link = f"https://t.me{bot_info.username}?start={db_user.tg_id}"
+    ref_link = f"https://t.me/{bot_info.username}?start={db_user.tg_id}"
 
     count_q = select(func.count(User.tg_id)).where(User.referrer_id == db_user.tg_id)
     total_refs = (await db_session.execute(count_q)).scalar() or 0
