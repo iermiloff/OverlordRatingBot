@@ -5,6 +5,7 @@ from datetime import datetime
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from sqlalchemy import select, and_
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
 
 from config import settings
 from database.connection import AsyncSessionLocal
