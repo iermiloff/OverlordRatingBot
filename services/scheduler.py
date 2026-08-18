@@ -14,51 +14,51 @@ from database.models import (
 logger = logging.getLogger(__name__)
 scheduler = AsyncIOScheduler()
 
-# Переменная в памяти для времени следующего сундука
+# Глобальный таймер в памяти
 next_chest_spawn_time = None
 
 async def calculate_next_chest_time():
-    """Расчет времени следующего сундука на основе МИНУТ из админки."""
+    """Безопасный расчет времени следующего сундука прямо из сессии воркера."""
     global next_chest_spawn_time
     now = datetime.utcnow()
     
     async with AsyncSessionLocal() as session:
-        # Вытягиваем конфигурацию первой активной группы для получения настроек
         cfg_q = select(ChatConfig).where(ChatConfig.is_active == True).limit(1)
         cfg_res = await session.execute(cfg_q)
         cfg = cfg_res.scalar_one_or_none()
         
-        # Если в админке еще ничего не настроено, берем безопасный дефолт в минутах
-        min_sleep_min = cfg.chest_min_sleep_minutes if cfg and hasattr(cfg, "chest_min_sleep_minutes") else 15
-        random_win_min = cfg.chest_random_window_minutes if cfg and hasattr(cfg, "chest_random_window_minutes") else 30
+        # Защита: считываем динамические параметры из админки (поля из SystemSettings/ChatConfig)
+        min_sleep = cfg.chest_min_sleep_minutes if cfg and hasattr(cfg, "chest_min_sleep_minutes") else 1
+        random_win = cfg.chest_random_window_minutes if cfg and hasattr(cfg, "chest_random_window_minutes") else 2
     
-    random_minutes = random.randint(0, random_win_min)
-    delay = timedelta(minutes=min_sleep_min + random_minutes)
+    random_minutes = random.randint(0, random_win)
+    delay = timedelta(minutes=min_sleep + random_minutes)
     
     next_chest_spawn_time = now + delay
     logger.info(
-        f"📦 [ТАЙМЕР СУНДУКОВ] Следующий дроп по админ-настройкам: "
+        f"📦 [ТАЙМЕР] Следующий сундук запланирован на: "
         f"{next_chest_spawn_time.strftime('%d.%m.%Y %H:%M:%S')} UTC"
     )
 
 async def check_and_send_random_chests(bot):
-    """Ежеминутная проверка таймера и выброс сундуков в чаты."""
+    """Ежеминутная проверка времени. Если None — принудительно рассчитывает."""
     global next_chest_spawn_time
     now = datetime.utcnow()
     
+    # ✅ ИСПРАВЛЕНО: Если таймер пуст, рассчитываем его в рабочем цикле
     if next_chest_spawn_time is None:
         await calculate_next_chest_time()
         return
 
     if now >= next_chest_spawn_time:
-        logger.info("📦 Время пришло! Выбрасываем Секретные Сундуки...")
+        logger.info("📦 [ДРОП] Время пришло! Отправляем сундуки...")
         
         async with AsyncSessionLocal() as session:
             chats_q = select(ChatConfig).where(ChatConfig.is_active == True)
             chats = (await session.execute(chats_q)).scalars().all()
             
             if not chats:
-                logger.warning("📦 Сундук готов, но активных чатов в БД нет!")
+                logger.warning("📦 Активных чатов в БД для сундука не найдено!")
                 await calculate_next_chest_time()
                 return
 
@@ -66,25 +66,22 @@ async def check_and_send_random_chests(bot):
                 "📦 **НАЙДЕН СЕКРЕТНЫЙ СУНДУК АКТИВНОСТИ!** 📦\n\n"
                 "Оверлорды сбросили на поле боя сундук со случайными сокровищами! "
                 "Кто первый успеет нажать на кнопку ниже и применить свой Ключ "
-                "— заберет всю добычу себе!\n\n"
-                "🔋 _Требования и цена открытия зависят от настроек пула админки._"
+                "— заберет всю добычу себе!"
             )
             
             from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
             chest_kb = InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔑 Открыть Сундук!", 
-                                      callback_data="chest_claim_click")]
+                                      callback_data="chest_open_click")]
             ])
 
             for chat in chats:
                 try:
                     await bot.send_message(
-                        chat_id=chat.id, 
-                        text=chest_text, 
-                        reply_markup=chest_kb, 
-                        parse_mode="Markdown"
+                        chat_id=chat.id, text=chest_text, 
+                        reply_markup=chest_kb, parse_mode="Markdown"
                     )
-                    logger.info(f"✅ Сундук отправлен в чат [{chat.title}]")
+                    logger.info(f"✅ Сундук заброшен в чат {chat.title}")
                 except Exception as e:
                     logger.error(f"❌ Ошибка отправки в чат {chat.id}: {e}")
             
@@ -123,26 +120,22 @@ async def check_and_process_giveaways(bot):
             if ticket_id == 0:
                 cond_text = (
                     f"1. 🎖️ Наличие титула от **'{t_name}'** и выше.\n"
-                    f"2. 🔓 Участие **БЕСПЛАТНОЕ**, лотерейные билеты не требуются!"
+                    f"2. 🔓 Участие **БЕСПЛАТНОЕ**, билеты не требуются!"
                 )
                 footer_text = (
-                    "ℹ️ _Вам не нужно никуда нажимать! Бот автоматически "
-                    "просканирует чат и выберет победителей среди тех, кто "
-                    "подходит по критериям!_"
+                    "ℹ️ _Бот автоматически выберет победителей среди тех, "
+                    "кто подходит по критериям активности!_"
                 )
             else:
                 ticket_item = await session.get(ShopItem, ticket_id)
-                ticket_name = ticket_item.name if ticket_item else "Удаленный билет"
+                ticket_name = ticket_item.name if ticket_item else "Билет"
                 cond_text = (
                     f"1. 🎖️ Наличие титула от **'{t_name}'** и выше.\n"
-                    f"2. 🎟️ Наличие билета **'{ticket_name}'** в вашем инвентаре."
+                    f"2. 🎟️ Наличие билета **'{ticket_name}'** в инвентаре."
                 )
                 footer_text = (
-                    f"📈 _Покупайте билеты в '🛍️ Магазин товаров'! Каждый билет "
-                    f"пропорционально умножает ваши шансы в лотерейном барабане бота!_\n\n"
                     f"⚠️ **ВНИМАНИЕ:** В случае победы у счастливчика "
-                    f"**сгорают ВСЕ билеты данного типа**, обнуляя его шансы "
-                    f"для следующего раунда! У проигравших билеты сохраняются! 🎇"
+                    f"**сгорают ВСЕ билеты данного типа**! 🎇"
                 )
 
             chats = (await session.execute(
@@ -150,19 +143,18 @@ async def check_and_process_giveaways(bot):
             )).scalars().all()
             
             text_announce = (
-                "🎉 **ВНИМАНИЕ! ЗАПЛАНИРОВАН АВТОМАТИЧЕСКИЙ РОЗЫГРЫШ!** 🎉\n\n"
+                "🎉 **ЗАПЛАНИРОВАН АВТОМАТИЧЕСКИЙ РОЗЫГРЫШ!** 🎉\n\n"
                 f"🎁 **Приз лотереи:** {prize_currency}\n"
                 f"🏆 **Призовых мест:** {ga.winners_count}\n"
-                f"⏳ **Авто-финал состоится:** `{ga.finalize_at.strftime('%d.%m.%Y %H:%M')}`\n\n"
-                f"🔒 **КРИТЕРИИ АВТО-ОТБОРА УЧАСТНИКОВ:**\n{cond_text}\n\n"
+                f"⏳ **Авто-финал:** `{ga.finalize_at.strftime('%d.%m.%Y %H:%M')}`\n\n"
+                f"🔒 **КРИТЕРИИ АВТО-ОТБОРА:**\n{cond_text}\n\n"
                 f"{footer_text}"
             )
             
             for chat in chats:
                 try: 
                     await bot.send_message(
-                        chat_id=chat.id, 
-                        text=text_announce, 
+                        chat_id=chat.id, text=text_announce, 
                         parse_mode="Markdown"
                     )
                 except Exception: pass
@@ -242,11 +234,10 @@ async def check_and_process_giveaways(bot):
                     w.lifetime_rating += int(ga.reward_value)
                 else:
                     new_order = Order(
-                        user_id=w.tg_id, 
-                        source="giveaway", 
-                        item_name=f"[РОЗЫГРЫШ] {ga.reward_value}",
+                        user_id=w.tg_id, source="giveaway", 
+                        item_name=f"[РОЗЫГРЫШ] {ga.reward_value}", 
                         status=OrderStatus.CREATED.value, 
-                        delivery_data="Выиграно автоматически. Ждите менеджера."
+                        delivery_data="Выиграно автоматически."
                     )
                     session.add(new_order)
                     
@@ -274,11 +265,11 @@ async def check_and_process_giveaways(bot):
                 ))
                 await session.execute(burn_query)
                 footer_status_text = (
-                    "Победители полностью обнулили свои билеты! "
+                    "Победители обнулили свои билеты! "
                     "У остальных купоны сохранены! 🔥"
                 )
             else:
-                footer_status_text = "Награды зачислены в личные кабинеты! 👏"
+                footer_status_text = "Награды зачислены в кабинеты! 👏"
 
             chats = (await session.execute(
                 select(ChatConfig).where(ChatConfig.is_active == True)
@@ -287,14 +278,13 @@ async def check_and_process_giveaways(bot):
             text_results = (
                 "🎉 **АВТОМАТИЧЕСКИЙ РОЗЫГРЫШ ЗАВЕРШЕН!** 🎉\n\n"
                 f"🎁 **Разыгранный приз:** {prize_currency}\n"
-                f"🏆 **Список наших счастливых победителей:**\n{winners_str}\n\n"
+                f"🏆 **Список победителей:**\n{winners_str}\n\n"
                 f"Поздравляем счастливчиков! {footer_status_text}"
             )
             for chat in chats:
                 try: 
                     await bot.send_message(
-                        chat_id=chat.id, 
-                        text=text_results, 
+                        chat_id=chat.id, text=text_results, 
                         parse_mode="Markdown"
                     )
                 except Exception: pass
@@ -305,13 +295,13 @@ async def check_and_process_giveaways(bot):
 
 def start_scheduler(bot):
     """Запуск фонового планировщика внутри главного процесса asyncio."""
-    import asyncio
+    # Регистрируем интервальные ежеминутные джобы
     scheduler.add_job(check_and_process_giveaways, 'interval', minutes=1, args=[bot])
     scheduler.add_job(check_and_send_random_chests, 'interval', minutes=1, args=[bot])
     
-    # Асинхронно вычисляем первое время спавна, чтобы не блокировать синхронный поток
-    asyncio.create_task(calculate_next_chest_time())
-    
+    # ✅ ИСПРАВЛЕНО: Убран вызов calculate_next_chest_time() из старта.
+    # Первый тик check_and_send_random_chests сам инициализирует время в фоне!
     scheduler.start()
-    logger.info("⏰ Фоновый планировщик успешно запущен!")
+    logger.info("⏰ Фоновый планировщик успешно запущен в работу!")
+
 
