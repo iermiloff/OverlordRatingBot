@@ -6,6 +6,7 @@ from sqlalchemy import select, and_, delete
 
 from config import settings
 from database.connection import AsyncSessionLocal
+# ВОЗВРАЩЕНО: Чистые модели Альфа-версии без конфликтов полей
 from database.models import (
     Giveaway, User, ChatConfig, 
     ShopItem, Inventory, Order, OrderStatus
@@ -27,7 +28,7 @@ async def calculate_next_chest_time():
         cfg_res = await session.execute(cfg_q)
         cfg = cfg_res.scalar_one_or_none()
         
-        # Защита: считываем динамические параметры из админки (поля из SystemSettings/ChatConfig)
+        # Считываем динамические параметры из админки (поля из SystemSettings)
         min_sleep = cfg.chest_min_sleep_minutes if cfg and hasattr(cfg, "chest_min_sleep_minutes") else 1
         random_win = cfg.chest_random_window_minutes if cfg and hasattr(cfg, "chest_random_window_minutes") else 2
     
@@ -41,11 +42,10 @@ async def calculate_next_chest_time():
     )
 
 async def check_and_send_random_chests(bot):
-    """Ежеминутная проверка времени. Если None — принудительно рассчитывает."""
+    """Ежеминутная проверка времени и выброс сундуков."""
     global next_chest_spawn_time
     now = datetime.utcnow()
     
-    # ✅ ИСПРАВЛЕНО: Если таймер пуст, рассчитываем его в рабочем цикле
     if next_chest_spawn_time is None:
         await calculate_next_chest_time()
         return
@@ -295,12 +295,10 @@ async def check_and_process_giveaways(bot):
 
 def start_scheduler(bot):
     """Запуск фонового планировщика внутри главного процесса asyncio."""
-    # Регистрируем интервальные ежеминутные джобы
+    # Регистрируем оба интервальных ежеминутных воркера
     scheduler.add_job(check_and_process_giveaways, 'interval', minutes=1, args=[bot])
     scheduler.add_job(check_and_send_random_chests, 'interval', minutes=1, args=[bot])
     
-    # ✅ ИСПРАВЛЕНО: Убран вызов calculate_next_chest_time() из старта.
-    # Первый тик check_and_send_random_chests сам инициализирует время в фоне!
     scheduler.start()
     logger.info("⏰ Фоновый планировщик успешно запущен в работу!")
 
