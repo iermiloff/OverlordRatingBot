@@ -16,9 +16,10 @@ async def cmd_manager_users_list(callback: CallbackQuery, is_manager: bool, db_s
     """Вывод списка участников экосистемы с постраничной пагинацией."""
     if not is_manager: return
     
-    page = int(callback.data.split(":"))
+    page = int(callback.data.split(":")[1])
     limit = 6
     offset = (page - 1) * limit
+
     
     count_q = select(func.count(User.tg_id))
     total = (await db_session.execute(count_q)).scalar() or 0
