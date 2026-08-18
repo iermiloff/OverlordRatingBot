@@ -15,33 +15,32 @@ logger = logging.getLogger(__name__)
 @router.message(F.text == "🎒 Мой Инвентарь / Награды")
 @router.callback_query(F.data == "user_inventory_main")
 @router.callback_query(F.data.startswith("u_inv_page:"))
-async def cmd_user_inventory_main(message_or_query, db_session: AsyncSession, db_user: User):
-    """Вывод поштучного инвентаря пользователя из ERP таблицы StockUnit."""
+async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
+    """Вывод поштучного инвентаря пользователя с жадной загрузкой связей товара."""
     page = 1
-    is_callback = isinstance(message_or_query, CallbackQuery)
-    
-    if is_callback and message_or_query.data.startswith("u_inv_page:"):
-        page = int(message_or_query.data.split(":"))
+    if callback.data.startswith("u_inv_page:"):
+        page = int(callback.data.split(":")[1])
         
-    limit = 5
+    limit = 4
     offset = (page - 1) * limit
     
-    # Считаем только выданные/выигранные единицы товара, принадлежащие юзеру
+    # Считаем общее количество вещей у пользователя
     count_q = select(func.count(StockUnit.id)).where(
         and_(StockUnit.owner_id == db_user.tg_id, StockUnit.status.in_(["sold", "won"]))
     )
     total = (await db_session.execute(count_q)).scalar() or 0
     
-    # Загружаем поштучные предметы с подгрузкой их мета-карточек ShopItem
-units_q = select(StockUnit).options(
-    joinedload(StockUnit.item)
-).where(
-    and_(
-        StockUnit.owner_id == db_user.tg_id,
-        StockUnit.status.in_(["sold", "won"])
-    )
-).order_by(StockUnit.created_at.desc()).limit(limit).offset(offset)
+    units_q = select(StockUnit).options(
+        joinedload(StockUnit.item)
+    ).where(
+        and_(
+            StockUnit.owner_id == db_user.tg_id,
+            StockUnit.status.in_(["sold", "won"])
+        )
+    ).order_by(StockUnit.created_at.desc()).limit(limit).offset(offset)
+    
     units = (await db_session.execute(units_q)).scalars().all()
+
     
     text = (
         "🎒 **Ваш личный инвентарь наград**\n\n"
