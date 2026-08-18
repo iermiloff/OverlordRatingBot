@@ -233,6 +233,18 @@ async def check_and_process_giveaways(bot):
                     # Начисление чистой валюты рейтинга на балансы
                     w.current_rating += int(ga.reward_value)
                     w.lifetime_rating += int(ga.reward_value)
+                    
+                    # ✅ ДОБАВЛЕНО: Мгновенное пуш-уведомление победителя в ЛС
+                    try:
+                        await bot.send_message(
+                            chat_id=w.tg_id,
+                            text=f"🎉 **Поздравляем с победой в розыгрыше!** 🎉\n\n"
+                                 f"🎁 Вы выиграли: **{ga.reward_value} "
+                                 f"{settings.CURRENCY_NAME}**!\n"
+                                 f"Рейтинг уже зачислен в ваш Личный Кабинет.",
+                            parse_mode="Markdown"
+                        )
+                    except Exception: pass
                 else:
                     # Создание тикета на выдачу мерча в админку
                     new_order = Order(
@@ -242,6 +254,18 @@ async def check_and_process_giveaways(bot):
                         delivery_data="Выиграно автоматически."
                     )
                     session.add(new_order)
+                    
+                    # ✅ ДОБАВЛЕНО: Мгновенное пуш-уведомление победителя мерча в ЛС
+                    try:
+                        await bot.send_message(
+                            chat_id=w.tg_id,
+                            text=f"🎒 **Поздравляем с победой в розыгрыше!** 🎒\n\n"
+                                 f"Вы выиграли реальный мерч: **{ga.reward_value}**!\n"
+                                 f"Заявка отправлена модераторам. Перейдите в ЛК "
+                                 f"в раздел '🎁 Мои Награды', чтобы заполнить данные.",
+                            parse_mode="Markdown"
+                        )
+                    except Exception: pass
                     
                     for manager_id in settings.managers_list:
                         try:
@@ -291,7 +315,6 @@ async def check_and_process_giveaways(bot):
                     )
                 except Exception: pass
                 
-            # Важно: переводим статус в finished, чтобы закрыть цикл
             ga.status = "finished"
             
         await session.commit()
@@ -303,3 +326,4 @@ def start_scheduler(bot):
     
     scheduler.start()
     logger.info("⏰ Фоновый планировщик успешно запущен в работу!")
+
