@@ -1,17 +1,20 @@
 import logging
 import random
-from datetime import datetime, timedelta
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, and_, delete
+import asyncio
+from datetime import datetime
+from aiogram import Bot
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from sqlalchemy import select, and_
 
 from config import settings
-from database.connection import AsyncSessionLocal
+from database.connection import async_session_maker
 from database.models import (
     Giveaway, User, ChatConfig, 
-    ShopItem, Inventory, Order, OrderStatus, SystemSettings
+    ShopItem, StockUnit, SystemSettings
 )
 
 logger = logging.getLogger(__name__)
+
 scheduler = AsyncIOScheduler()
 
 # Время последнего успешного дропа сундука в чаты (кэшируем только факт отправки)
