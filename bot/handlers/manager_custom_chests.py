@@ -547,49 +547,67 @@ async def process_cc_user_open(
     weights = [r.weight for r in rewards]
     win_list = random.choices(population, weights=weights, k=1)
     
-    # ИСПРАВЛЕНО: строго берем элемент по индексу 0
     win_reward = win_list[0]
-    
-    if str(win_reward.reward_type) == "rating":
-        amount = int(win_reward.value)
-        db_user.current_rating += amount
-        db_user.lifetime_rating += amount
-        await db_session.commit()
-        try: 
-            await callback.bot.send_message(
-                chat_id=db_user.tg_id, 
-                text=f"💎 Твой выигрыш: +{amount} {settings.CURRENCY_NAME}!"
-            )
-        except Exception: pass
-    else:
-        new_order = Order(
-            user_id=db_user.tg_id, source="custom_chest", 
-            item_name=f"[КАСТОМ СУНДУК] {win_reward.value}",
-            status=OrderStatus.CREATED.value, 
-            delivery_data="Выиграно в кастомном сундуке."
-        )
-        db_session.add(new_order)
-        await db_session.commit()
- 
-        try:
-            await callback.bot.send_message(
-                chat_id=db_user.tg_id,
-                text=f"🎒 **Вы выиграли мерч:** *{win_reward.value}*",
-                parse_mode="Markdown"
-            )
-        except Exception: pass
         
-        for manager_id in settings.managers_list:
-            try:
-                await callback.bot.send_message(
-                    manager_id,
-                    text=f"📦 **Кастом Сундук:** @{db_user.username or db_user.tg_id} "
-                         f"выиграл *{win_reward.value}*.",
-                    parse_mode="Markdown"
-                )
+        if str(win_reward.reward_type) == "rating":
+            amount = int(win_reward.value)
+            db_user.current_rating += amount
+            db_user.lifetime_rating += amount
+            await db_session.commit()
+            try: await callback.bot.send_message(chat_id=db_user.tg_id, text=f"💎 Вы выиграли: +{amount} поинтов!")
             except Exception: pass
+        else:
+
+            item_q = select(ShopItem).where(
+                and_(ShopItem.name == win_reward.value, ShopItem.is_deleted == False)
+            ).limit(1)
+            shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
             
-    await callback.answer()
+            unit = None
+            if shop_item:
+                # Ищем свободную поштучную единицу товара на Складе (статус stock)
+                unit_q = select(StockUnit).where(
+                    and_(StockUnit.item_id == shop_item.id, StockUnit.status == "stock")
+                ).limit(1)
+                unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+                
+            if unit and shop_item:
+                # Товар есть на складе: атомарно бронируем за юзером в статусе ожидания оформления
+                unit.status = "won"
+                unit.owner_id = db_user.tg_id
+                unit.purchase_source = "chest_custom"
+                
+                # Юзер сам введет СДЭК или кошелек TON в своем Инвентаре без рисков скама
+                unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]"
+                await db_session.commit()
+                
+                try:
+                    await callback.bot.send_message(
+                        chat_id=db_user.tg_id,
+                        text=f"🎉 **Поздравляем! Вы открыли кастомный сундук и выиграли: {shop_item.name}!**\n\n"
+                             f"🆔 Уникальный ID предмета: `{unit.id}`.\n"
+                             f"📦 Товар забронирован за вами. Чтобы ввести данные для доставки "
+                             f"или реквизиты кошелька, перейдите в меню '🎒 Мой Инвентарь / Награды'.",
+                        parse_mode="Markdown"
+                    )
+                except Exception: pass
+            else:
+                # ФОЛБЕК-КОМПЕНСАЦИЯ: Если админ разыграл мерч, которого физически нет на Складе
+                fallback_coins = 75
+                db_user.current_rating += fallback_coins
+                db_user.lifetime_rating += fallback_coins
+                await db_session.commit()
+                try:
+                    await callback.bot.send_message(
+                        chat_id=db_user.tg_id,
+                        text=f"🎁 Вы выиграли приз *{win_reward.value}*, но его не оказалось на Складе!\n"
+                             f"Вам начислен автоматический утешительный баланс: +{fallback_coins} поинтов!",
+                        parse_mode="Markdown"
+                    )
+                except Exception: pass
+
+        await callback.answer()
+
 
 @router.callback_query(F.data == "cc_cancel")
 async def process_cc_cancel(callback: CallbackQuery, state: FSMContext):
