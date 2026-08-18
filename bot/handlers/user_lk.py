@@ -47,7 +47,7 @@ async def show_user_referrals(callback: CallbackQuery, db_user: User, db_session
 
     text = (
         "🤝 **Партнерская программа проекта**\n\n"
-        f"Приглашайте друзей и получайте бонус в размере **{settings.REFERRAL_REWARD}** {settings.CURRENCY_NAME} "
+        f"Приглашайте друзей и получайте бонус в размере **{settings.REF_REWARD_RATING}** {settings.CURRENCY_NAME} "
         "за каждого реферала, проявившего активность в чатах!\n\n"
         f"👥 Всего приглашено партнеров: **{total_refs}** чел.\n\n"
         f"🔗 Ваша уникальная реферальная ссылка:\n`{ref_link}`"
