@@ -595,34 +595,27 @@ async def cmd_manager_orders_queue(
 async def process_manager_order_manage_card(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
-    """Детальная карточка обработки конкретной заявки с жадной загрузкой связей товара."""
-    if not is_manager: 
-        return
-        
+    """Детальная карточка обработки конкретной заявки с безопасным редиректом."""
+    if not is_manager: return
+    
     parts = callback.data.split(":")
     unit_id = int(parts[1])
     page = int(parts[2])
     
-    # ИСПРАВЛЕНО: Вместо .get() используем select с joinedload для подгрузки unit.item
-    unit_q = select(StockUnit).options(
-        joinedload(StockUnit.item)
-    ).where(StockUnit.id == unit_id)
-    
+    unit_q = select(StockUnit).options(joinedload(StockUnit.item)).where(StockUnit.id == unit_id)
     unit = (await db_session.execute(unit_q)).scalar_one_or_none()
     
-    # Проверяем существование записи и наличие активной метки заявки
+    # ИСПРАВЛЕНО: Безопасный редирект в очередь без мутации frozen-объекта callback.data
     if not unit or not unit.serial_or_promo or not str(unit.serial_or_promo).startswith("[ЗАЯВКА]:"):
         await callback.answer("❌ Заявка уже обработана или не найдена!", show_alert=True)
-        # Имитируем клик возврата в очередь, чтобы обновить экран менеджера
-        callback.data = f"mg_orders_queue:{page}"
-        await cmd_manager_orders_queue(callback, is_manager, db_session)
+        
+        # Создаем валидный клон объекта через model_copy (для Pydantic v2)
+        fake_callback = callback.model_copy(update={"data": f"mg_orders_queue:{page}"})
+        await cmd_manager_orders_queue(fake_callback, is_manager, db_session)
         return
         
-    # Теперь это свойство прочитается из памяти моментально и без ошибок!
     item_name = unit.item.name if unit.item else f"Предмет #{unit.item_id}"
     user_reqs = str(unit.serial_or_promo).replace("[ЗАЯВКА]:", "").strip()
-    
-    # Проверяем дату создания на случай, если СУБД вернула пустое поле
     date_str = unit.created_at.strftime('%d.%m.%Y %H:%M') if unit.created_at else "Не указана"
     
     text = (
@@ -644,15 +637,11 @@ async def process_manager_order_manage_card(
     try:
         await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
     except Exception:
-        # Фолбек на случай, если Telegram придерется к спецсимволам в реквизитах пользователя
         await callback.message.answer(text=text, reply_markup=kb, parse_mode="HTML")
-        try: 
-            await callback.message.delete()
-        except Exception: 
-            pass
+        try: await callback.message.delete()
+        except Exception: pass
             
     await callback.answer()
-
 
 @router.callback_query(F.data.startswith("mg_order_close:"))
 async def process_manager_order_close(
@@ -680,6 +669,6 @@ async def process_manager_order_close(
             )
         except Exception: pass
         
-    # Возвращаемся в очередь на текущую страницу
-    callback.data = f"mg_orders_queue:{page}"
-    await cmd_manager_orders_queue(callback, is_manager, db_session)
+fake_callback = callback.model_copy(update={"data": f"mg_orders_queue:{page}"})
+await cmd_manager_orders_queue(fake_callback, is_manager, db_session)
+
