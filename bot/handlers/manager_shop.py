@@ -669,6 +669,8 @@ async def process_manager_order_close(
             )
         except Exception: pass
         
-fake_callback = callback.model_copy(update={"data": f"mg_orders_queue:{page}"})
-await cmd_manager_orders_queue(fake_callback, is_manager, db_session)
+
+    fake_callback = callback.model_copy(update={"data": f"mg_orders_queue:{page}"})
+    await cmd_manager_orders_queue(fake_callback, is_manager, db_session)
+
 
