@@ -213,13 +213,19 @@ async def process_ga_finalize_time(message: Message, state: FSMContext, db_user:
         if utc_finalize <= data.get("ga_announce_at"):
             await message.answer("❌ Время итогов должно быть позже времени анонса!")
             return
+
+        raw_r_type = str(data.get("ga_type"))
+        raw_c_type = str(data.get("ga_cond_type"))
+        
+        clean_reward_type = "rating" if "rating" in raw_r_type else "item"
+        clean_cond_type = "ticket" if "ticket" in raw_c_type else "free"
             
         new_ga = Giveaway(
-            reward_type=str(data.get("ga_type")[1]), # Вытаскиваем чистую строку приза
-            reward_value=data.get("ga_val"),
-            winners_count=data.get("ga_winners"),
-            condition_type=str(data.get("ga_cond_type")[1]), 
-            condition_value=str(data.get("ga_cond_val")),
+            reward_type=clean_reward_type,  # Жестко: строго 'rating' или 'item'
+            reward_value=str(data.get("ga_val")).strip(),
+            winners_count=int(data.get("ga_winners")),
+            condition_type=clean_cond_type, # Жестко: строго 'free' или 'ticket'
+            condition_value=str(data.get("ga_cond_val")).strip(),
             min_title_id=int(data.get("ga_min_title")),
             announce_at=data.get("ga_announce_at"),
             finalize_at=utc_finalize,
@@ -228,8 +234,9 @@ async def process_ga_finalize_time(message: Message, state: FSMContext, db_user:
         db_session.add(new_ga)
         await db_session.commit()
         await state.clear()
-     
+        
         await message.answer("✅ **Умный розыгрыш успешно запланирован в СУБД!**")
     except ValueError:
         await message.answer("❌ Неверный формат! Пишите строго по шаблону: `20.08.2026 21:00`")
+
 
