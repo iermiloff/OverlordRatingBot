@@ -14,6 +14,9 @@ class ManagerActivitySetup(StatesGroup):
 class ManagerCustomChestSetup(StatesGroup):
     waiting_for_name = State()
     waiting_for_description = State()
+    waiting_for_custom_price = State()
+    waiting_for_custom_title = State()
+    waiting_for_custom_ticket = State()
     waiting_for_media = State()
 
 class ManagerCustomRewardSetup(StatesGroup):
