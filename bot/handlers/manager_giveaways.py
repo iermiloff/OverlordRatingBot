@@ -92,23 +92,21 @@ async def process_mg_giveaway_create_start(callback: CallbackQuery, is_manager: 
     )
     await callback.answer()
 
-
 @router.callback_query(ManagerGiveawaySetup.waiting_for_type, F.data.startswith("mg_ga_type_set:"))
 async def process_ga_type_choice(callback: CallbackQuery, state: FSMContext):
-    """Сохранение типа приза и переход кводу его значения."""
-    ga_type = callback.data.split(":")[1]
-    await state.update_data(ga_type=ga_type)
+    """Сохранение типа приза с чистым извлечением строки без списков."""
+    ga_type_str = callback.data.split(":")[1]
+    await state.update_data(ga_type=ga_type_str)
     
     await state.set_state(ManagerGiveawaySetup.waiting_for_value)
     
-    if ga_type == "rating":
+    if ga_type_str == "rating":
         prompt = "Введите **количество поинтов**, которое получит победитель (целое число):"
     else:
-        prompt = "Введите **название товара**, как оно написано на Складе ERP (например: `Худи а не Хули`):"
+        prompt = "Введите **название товара**, как оно написано на Складе ERP (например: `Худи Оверлорда`):"
         
-    await callback.message.edit_text(f"🎁 **Шаг 2/5:** {prompt}")
+    await callback.message.edit_text(f"🎁 **Шаг 2/5:** {prompt}", parse_mode="Markdown")
     await callback.answer()
-
 
 @router.message(ManagerGiveawaySetup.waiting_for_value)
 async def process_ga_value_input(message: Message, state: FSMContext):
@@ -125,15 +123,6 @@ async def process_ga_value_input(message: Message, state: FSMContext):
     await state.set_state(ManagerGiveawaySetup.waiting_for_winners)
     await message.answer("👥 **Шаг 3/5:** Введите **количество победителей** (целое число):")
 
-
-# Обнови/проверь стейты в bot/states.py:
-# class ManagerGiveawaySetup(StatesGroup):
-#     ...
-#     waiting_for_condition_type = State() # Выбор: бесплатно или билет
-#     waiting_for_ticket = State()         # Выбор конкретного билета
-#     waiting_for_title = State()          # ОБЯЗАТЕЛЬНЫЙ выбор титула-ценза
-#     waiting_for_announce_time = State()
-#     waiting_for_finalize_time = State()
 
 @router.message(ManagerGiveawaySetup.waiting_for_winners)
 async def process_ga_winners(message: Message, state: FSMContext):
