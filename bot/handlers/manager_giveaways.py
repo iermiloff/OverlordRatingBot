@@ -103,54 +103,92 @@ async def process_ga_winners(message: Message, state: FSMContext):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
     )
 
-@router.callback_query(
-    ManagerGiveawaySetup.waiting_for_title, 
-    F.data.startswith("mg_ga_title:")
-)
+# Измени стейты в bot/states.py (или допиши в верху файла):
+# class ManagerGiveawaySetup(StatesGroup):
+#     ...
+#     waiting_for_title = State()
+#     waiting_for_announce_time = State() # Шаг 4: Время анонса
+#     waiting_for_finalize_time = State() # Шаг 5: Время итогов
+
+from datetime import datetime
+import zoneinfo # Для нативной работы с таймзонами менеджеров
+
+def parse_manager_time(text_input: str, user_tz: str) -> datetime:
+    """Конвертирует локальное время менеджера в UTC для СУБД."""
+    # Ожидаем формат "ДД.ММ.ГГГГ ЧХ:ММ" (напр. "19.08.2026 18:00")
+    local_dt = datetime.strptime(text_input.strip(), "%d.%m.%Y %H:%M")
+    # Привязываем локальную таймзону (напр. Europe/Moscow)
+    local_dt = local_dt.replace(tzinfo=zoneinfo.ZoneInfo(user_tz))
+    # Переводим в чистый UTC для сервера
+    return local_dt.astimezone(zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
+
+
+@router.callback_query(ManagerGiveawaySetup.waiting_for_title, F.data.startswith("mg_ga_title:"))
 async def process_ga_title(callback: CallbackQuery, state: FSMContext):
-    t_id = int(callback.data.split(":")[1])
+    t_id = int(callback.data.split(":"))
     await state.update_data(ga_title=t_id)
-    await state.set_state(ManagerGiveawaySetup.waiting_for_duration)
+    
+    await state.set_state(ManagerGiveawaySetup.waiting_for_announce_time)
     await callback.message.edit_text(
-        "🎉 **Шаг 5/5:** Через сколько **МИНУТ** подвести итоги?"
+        "📅 **Шаг 4/5: Время АНОНСА розыгрыша**\n\n"
+        "Введите дату и время, когда бот должен опубликовать пост-анонс в чаты.\n"
+        "Формат строго: `ДД.ММ.ГГГГ ЧХ:ММ` (например: `19.08.2026 18:00`):",
+        parse_mode="Markdown"
     )
     await callback.answer()
 
 
-@router.message(ManagerGiveawaySetup.waiting_for_duration)
-async def process_ga_duration(
-    message: Message, state: FSMContext, db_session: AsyncSession
-):
-    if not message.text.strip().isdigit():
-        await message.answer("❌ Введите число минут:")
-        return
+@router.message(ManagerGiveawaySetup.waiting_for_announce_time)
+async def process_ga_announce_time(message: Message, state: FSMContext, db_user: User):
+    try:
+        user_tz = db_user.timezone or "UTC"
+        utc_announce = parse_manager_time(message.text, user_tz)
+        await state.update_data(ga_announce_at=utc_announce)
         
-    mins = int(message.text.strip())
-    data = await state.get_data()
-    
-    now = datetime.utcnow()
-    end_time = now + timedelta(minutes=mins)
-    
-    new_ga = Giveaway(
-        reward_type=str(data.get("ga_type")),
-        reward_value=data.get("ga_val"),
-        winners_count=data.get("ga_winners"),
-        condition_value=str(data.get("ga_title")),
-        announce_at=now,
-        finalize_at=end_time,
-        status="created"
-    )
-    db_session.add(new_ga)
-    await db_session.commit()
-    await state.clear()
-    
-    await message.answer(
-        f"✅ **Розыгрыш успешно создан!**\n\n"
-        f"📊 Итоги будут подведены автоматически через `{mins}` мин. "
-        f"Планировщик опубликует анонс в группы."
-    )
+        await state.set_state(ManagerGiveawaySetup.waiting_for_finalize_time)
+        await message.answer(
+            "🏁 **Шаг 5/5: Время ПОДВЕДЕНИЯ ИТОГОВ**\n\n"
+            "Введите дату и время, когда планировщик определит победителей.\n"
+            "Формат строго: `ДД.ММ.ГГГГ ЧХ:ММ` (например: `20.08.2026 21:00`):",
+            parse_mode="Markdown"
+        )
+    except ValueError:
+        await message.answer("❌ Неверный формат! Напишите строго по шаблону: `19.08.2026 18:00`")
 
-# --- ❌ ОТМЕНА КОНСТРУКТОРА РОЗЫГРЫШЕЙ ---
+
+@router.message(ManagerGiveawaySetup.waiting_for_finalize_time)
+async def process_ga_finalize_time(message: Message, state: FSMContext, db_user: User, db_session: AsyncSession):
+    try:
+        user_tz = db_user.timezone or "UTC"
+        utc_finalize = parse_manager_time(message.text, user_tz)
+        data = await state.get_data()
+        
+        if utc_finalize <= data.get("ga_announce_at"):
+            await message.answer("❌ Время итогов должно быть строго ПОЗЖЕ времени анонса!")
+            return
+            
+        new_ga = Giveaway(
+            reward_type=str(data.get("ga_type")),
+            reward_value=data.get("ga_val"),
+            winners_count=data.get("ga_winners"),
+            condition_value=str(data.get("ga_title")),
+            announce_at=data.get("ga_announce_at"), # Время публикации
+            finalize_at=utc_finalize,               # Время сбора логов и финиша
+            status="created"                         # Статус ожидания анонса
+        )
+        db_session.add(new_ga)
+        await db_session.commit()
+        await state.clear()
+        
+        await message.answer(
+            f"✅ **Умный розыгрыш успешно запланирован!**\n\n"
+            f"📡 Анонс в группы (UTC): `{data.get('ga_announce_at').strftime('%d.%m %H:%M')}`\n"
+            f"🏆 Финал и логи (UTC): `{utc_finalize.strftime('%d.%m %H:%M')}`\n\n"
+            f"Планировщик сделает всё автоматически."
+        )
+    except ValueError:
+        await message.answer("❌ Неверный формат! Напишите строго по шаблону: `20.08.2026 21:00`")
+
 
 @router.callback_query(F.data == "mg_ga_cancel")
 async def process_ga_cancel(callback: CallbackQuery, state: FSMContext):
