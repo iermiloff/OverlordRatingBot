@@ -20,6 +20,62 @@ def parse_manager_time(text_input: str, user_tz: str) -> datetime:
     local_dt = local_dt.replace(tzinfo=zoneinfo.ZoneInfo(user_tz))
     return local_dt.astimezone(zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
 
+
+@router.callback_query(F.data == "mg_giveaway_create_start")
+async def process_mg_giveaway_create_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
+    """Инициализация пошагового создания розыгрыша из главного меню админки."""
+    if not is_manager: return
+    
+    await state.set_state(ManagerGiveawaySetup.waiting_for_type)
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="💰 Валюта (Рейтинг)", callback_data="mg_ga_type_set:rating"),
+            InlineKeyboardButton(text="🎒 Вещевой Мерч", callback_data="mg_ga_type_set:item")
+        ]
+    ])
+    
+    await callback.message.edit_text(
+        "🏆 **Конструктор Лотерей Оверлорда**\n\n"
+        "**Шаг 1/5:** Выберите тип награды для участников чата:",
+        reply_markup=kb
+    )
+    await callback.answer()
+
+
+@router.callback_query(ManagerGiveawaySetup.waiting_for_type, F.data.startswith("mg_ga_type_set:"))
+async def process_ga_type_choice(callback: CallbackQuery, state: FSMContext):
+    """Сохранение типа приза и переход кводу его значения."""
+    ga_type = callback.data.split(":")[1]
+    await state.update_data(ga_type=ga_type)
+    
+    await state.set_state(ManagerGiveawaySetup.waiting_for_value)
+    
+    if ga_type == "rating":
+        prompt = "Введите **количество поинтов**, которое получит победитель (целое число):"
+    else:
+        prompt = "Введите **название товара**, как оно написано на Складе ERP (например: `Худи Оверлорда`):"
+        
+    await callback.message.edit_text(f"🎁 **Шаг 2/5:** {prompt}")
+    await callback.answer()
+
+
+@router.message(ManagerGiveawaySetup.waiting_for_value)
+async def process_ga_value_input(message: Message, state: FSMContext):
+    """Сохранение значения приза и переход к числу победителей."""
+    data = await state.get_data()
+    ga_type = data.get("ga_type")
+    text = message.text.strip()
+    
+    if ga_type == "rating" and not text.isdigit():
+        await message.answer("❌ Введите корректное целое число поинтов:")
+        return
+        
+    await state.update_data(ga_val=text)
+    await state.set_state(ManagerGiveawaySetup.waiting_for_winners)
+    await message.answer("👥 **Шаг 3/5:** Введите **количество победителей** (целое число):")
+
+
 @router.callback_query(ManagerGiveawaySetup.waiting_for_winners)
 @router.message(ManagerGiveawaySetup.waiting_for_winners)
 async def process_ga_winners(message: Message, state: FSMContext):
