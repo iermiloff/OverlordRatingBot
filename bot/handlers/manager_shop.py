@@ -696,4 +696,51 @@ async def process_manager_order_close(
     await cmd_manager_orders_queue(fake_callback, is_manager, db_session)
 
 
+@router.callback_query(F.data.startswith("mg_orders_archive:"))
+async def cmd_manager_orders_archive(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Просмотр заархивированных (выданных) наград менеджером."""
+    if not is_manager: return
+    
+    page = int(callback.data.split(":")[1])
+    limit = 5
+    offset = (page - 1) * limit
+    
+    # Ищем предметы со статусом archived и меткой [ВЫДАНО]
+    archive_q = select(StockUnit).options(joinedload(StockUnit.item)).where(
+        and_(StockUnit.status == "archived", StockUnit.serial_or_promo.like("[ВЫДАНО]:%"))
+    ).order_by(StockUnit.updated_at.desc())
+    
+    total_q = select(func.count(StockUnit.id)).where(
+        and_(StockUnit.status == "archived", StockUnit.serial_or_promo.like("[ВЫДАНО]:%"))
+    )
+    total = (await db_session.execute(total_q)).scalar() or 0
+    
+    units = (await db_session.execute(archive_q.limit(limit).offset(offset))).scalars().all()
+    
+    text = (
+        "📜 **Архив завершенных выдач**\n\n"
+        f"Всего успешно обработано наград: **{total}** шт.\n\n"
+    )
+    
+    buttons = []
+    for u in units:
+        name = u.item.name if u.item else "Предмет"
+        buttons.append([
+            InlineKeyboardButton(text=f"✅ {name} (ID: {u.id})", callback_data=f"mg_archive_view:{u.id}:{page}")
+        ])
+        
+    # Стрелочки пагинации для архива
+    nav_row = []
+    if page > 1:
+        nav_row.append(InlineKeyboardButton(text=" Назад", callback_data=f"mg_orders_archive:{page-1}"))
+    if page * limit < total:
+        nav_row.append(InlineKeyboardButton(text="Вперед ", callback_data=f"mg_orders_archive:{page+1}"))
+    if nav_row: buttons.append(nav_row)
+    
+    buttons.append([InlineKeyboardButton(text="↩️ Вернуться к активным", callback_data="mg_orders_queue:1")])
+    
+    await callback.message.edit_text(text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
+    await callback.answer()
 
