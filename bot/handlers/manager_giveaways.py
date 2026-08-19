@@ -39,8 +39,19 @@ async def cmd_manager_giveaways_dashboard(callback: CallbackQuery, is_manager: b
     kb = [[InlineKeyboardButton(text="➕ Запланировать новый розыгрыш", callback_data="mg_giveaway_create_start")]]
     
     for ga in active_gas:
-        status_lbl = "📡 Ждет анонса" if ga.status == "created" else "⏳ Идет сбор логов"
-        kb.append([InlineKeyboardButton(text=f"🎁 #{ga.id} | {ga.reward_value} ({status_lbl})", callback_data=f"mg_ga_view_card:{ga.id}")])
+        status_lbl = "📡 Ждет" if ga.status == "created" else "⏳ Сбор"
+        kb.append([
+            # Левая кнопка: Информация (если нужна)
+            InlineKeyboardButton(
+                text=f"🎁 #{ga.id} | {ga.reward_value} ({status_lbl})",
+                callback_data=f"mg_ga_view_card:{ga.id}"
+            ),
+            # Правая кнопка: Мгновенное No-Code удаление дефекта из базы
+            InlineKeyboardButton(
+                text="❌ Удалить",
+                callback_data=f"mg_ga_delete_execute:{ga.id}"
+            )
+        ])
         
     kb.append([InlineKeyboardButton(text="↩️ Вернуться в корень админки", callback_data="main_menu_manager")])
     
