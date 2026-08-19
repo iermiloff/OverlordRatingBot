@@ -216,18 +216,51 @@ async def start_reward_setup_loop(msg: Message, state: FSMContext, chest_id: int
     ManagerCustomRewardSetup.waiting_for_type, 
     F.data.startswith("cc_reward_type:")
 )
-async def process_cc_reward_type(callback: CallbackQuery, state: FSMContext):
+async def process_cc_reward_type(
+    callback: CallbackQuery, state: FSMContext, db_session: AsyncSession
+):
     r_type = callback.data.split(":")[1]
-    await state.update_data(r_type=r_type)
-    await state.set_state(ManagerCustomRewardSetup.waiting_for_value)
+    await state.update_data(cc_r_type=r_type)
     
-    p = (
-        f"Введите **количество {settings.CURRENCY_NAME}**:"
-        if r_type == "rating" else
-        "Введите **название мерча** (напр. _Худи с логотипом_):"
-    )
+    if r_type == "rating":
+        await state.set_state(ManagerCustomRewardSetup.waiting_for_value)
+        await callback.message.edit_text(
+            f"Введите количество {settings.CURRENCY_NAME} для этой награды:"
+        )
+    else:
+        # ЖЕСТКИЙ ВЫБОР ДЛЯ КАСТОМНОГО СУНДУКА
+        items_q = select(ShopItem).where(ShopItem.is_deleted == False)
+        shop_items = (await db_session.execute(items_q)).scalars().all()
+        
+        if not shop_items:
+            await callback.answer("❌ На складе нет созданных товаров!", show_alert=True)
+            return
+            
+        kb_buttons = []
+        for item in shop_items:
+            kb_buttons.append([
+                InlineKeyboardButton(text=f"📦 {item.name}", callback_data=f"cc_merch_select:{item.name}")
+            ])
+        kb_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="cc_reward_cancel")])
+        merch_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+        
+        await state.set_state(ManagerCustomRewardSetup.waiting_for_value)
+        await callback.message.edit_text(
+            "Выберите мерч из списка доступных на Складе для добавления в кастомный сундук:",
+            reply_markup=merch_kb
+        )
+    await callback.answer()
+
+@router.callback_query(ManagerCustomRewardSetup.waiting_for_value, F.data.startswith("cc_merch_select:"))
+async def process_cc_reward_merch_callback(callback: CallbackQuery, state: FSMContext):
+    merch_name = callback.data.split("cc_merch_select:")[1]
+    
+    await state.update_data(cc_r_value=merch_name)
+    await state.set_state(ManagerCustomRewardSetup.waiting_for_weight)
+    
     await callback.message.edit_text(
-        f"🎁 **Настройка награды [Шаг 2/3]**\n\n{p}", parse_mode="Markdown"
+        f"Выбран мерч: **{merch_name}**\n\nУкажите **вес (вероятность) выпадения** этой награды (отправьте числом):",
+        parse_mode="Markdown"
     )
     await callback.answer()
 
