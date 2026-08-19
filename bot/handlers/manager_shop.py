@@ -4,7 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
-
+from sqlalchemy.orm import joinedload
 from config import settings
 from database.models import ShopItem, StockUnit
 from bot.states import (
@@ -538,8 +538,10 @@ async def cmd_manager_orders_queue(
     limit = 5
     offset = (page - 1) * limit
     
-    # Ищем предметы, где в серийнике висит активная [ЗАЯВКА] от юзера
-    queue_q = select(StockUnit).where(
+    # ИСПРАВЛЕНО: Добавлен joinedload(StockUnit.item) для жадной загрузки связей товара
+    queue_q = select(StockUnit).options(
+        joinedload(StockUnit.item)
+    ).where(
         StockUnit.serial_or_promo.like("[ЗАЯВКА]:%")
     ).order_by(StockUnit.updated_at.asc())
     
@@ -549,12 +551,13 @@ async def cmd_manager_orders_queue(
     )
     total = (await db_session.execute(total_q)).scalar() or 0
     
+    # Запрос выполнится и сразу подтянет ShopItem, исключая MissingGreenlet
     units = (await db_session.execute(
         queue_q.limit(limit).offset(offset)
     )).scalars().all()
     
     text = (
-        "📥 **Очередь активных заявок на выдачу**\n\n"
+        "📥 **Очередь active заявок на выдачу**\n\n"
         "Сюда попадают физический мерч, требующий отправки, "
         "и ручные ваучеры (TON/крипта), где юзер оставил реквизиты.\n\n"
         f"Всего заявок ожидает обработки: **{total}** шт."
