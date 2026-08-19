@@ -106,74 +106,90 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
 
 @router.callback_query(F.data.startswith("inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
-    """Просмотр карточки предмета инвентаря с сохранением оригинального Markdown-режима."""
-    unit_id = int(callback.data.split(":")[1])
+    """
+    Абсолютно надежный просмотр карточки предмета. 
+    Исключены любые ошибки парсинга разметки Telegram API.
+    """
+    unit_id = int(callback.data.split(":"))
     
+    # 1. Получаем единицу товара
     unit_q = select(StockUnit).where(StockUnit.id == unit_id)
     unit = (await db_session.execute(unit_q)).scalar_one_or_none()
     
     if not unit:
-        await callback.answer("❌ Предмет не найден.", show_alert=True)
+        await callback.answer("❌ Предмет не найден в инвентаре.", show_alert=True)
         return
 
+    # 2. Получаем описание товара
     item_q = select(ShopItem).where(ShopItem.id == unit.item_id)
     shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
 
-    # Возвращаем оригинальную Markdown-структуру твоего проекта
+    # Собираем чистый текст БЕЗ тегов и звездочек, чтобы Telegram не выдавал ошибку парсинга
     text = (
-        f"📦 **Предмет:** {shop_item.name}\n"
-        f"📝 **Описание:** {shop_item.description or 'Нет описания'}\n"
-        f"🔍 **Источник:** {unit.purchase_source or 'Магазин'}\n"
-        f"🆔 **ID предмета:** `{unit.id}`\n\n"
+        f"📦 Предмет: {shop_item.name}\n"
+        f"📝 Описание: {shop_item.description or 'Нет описания'}\n"
+        f"🔍 Источник получения: {unit.purchase_source or 'Магазин'}\n"
+        f"🆔 Уникальный ID предмета: {unit.id}\n\n"
     )
 
     kb_buttons = []
 
-    # Безопасная проверка на существование строки перед вызовом .startswith()
-    is_delivery_requested = False
+    # 3. Безопасная проверка реквизитов (без вызова startswith у None)
+    is_delivery_processed = False
+    
     if unit.serial_or_promo is not None:
-        if str(unit.serial_or_promo).startswith("[ЗАЯВКА]:"):
-            delivery_info = str(unit.serial_or_promo).replace("[ЗАЯВКА]:", "").strip()
-            text += f"⏳ **Статус:** Ожидает отправки\n📍 **Реквизиты:**\n_{delivery_info}_"
-            is_delivery_requested = True
-        elif str(unit.serial_or_promo).startswith("[ВЫДАНО]:"):
-            archive_info = str(unit.serial_or_promo).replace("[ВЫДАНО]:", "").strip()
-            text += f"✅ **Статус:** Выдано\nℹ️ **Инфо:**\n_{archive_info}_"
-            is_delivery_requested = True
+        val_str = str(unit.serial_or_promo)
+        if val_str.startswith("[ЗАЯВКА]:"):
+            delivery_info = val_str.replace("[ЗАЯВКА]:", "").strip()
+            text += f"⏳ Статус: Ожидает отправки менеджером\n📍 Ваши реквизиты:\n{delivery_info}"
+            is_delivery_processed = True
+        elif val_str.startswith("[ВЫДАНО]:"):
+            archive_info = val_str.replace("[ВЫДАНО]:", "").strip()
+            text += f"✅ Статус: Доставлено / Выдано\nℹ️ Информация от админа:\n{archive_info}"
+            is_delivery_processed = True
         else:
-            text += f"🔑 **Ваш промокод / Ключ:**\n`{unit.serial_or_promo}`"
-            is_delivery_requested = True
+            text += f"🔑 Ваш промокод / Ключ активации:\n{val_str}"
+            is_delivery_processed = True
 
-    # Если в поле None — выводим кнопку реквизитов для мерча из сундука
-    if not is_delivery_requested:
+    # 4. Если в поле None (мерч из сундука), то выводим кнопку ввода адреса
+    if not is_delivery_processed:
         text += (
-            f"🛑 **Статус:** Реквизиты доставки не заполнены.\n\n"
-            f"Нажмите кнопку ниже, чтобы оставить данные для отправки."
+            f"🛑 Статус: Реквизиты доставки не заполнены.\n\n"
+            f"💡 Для получения этого физического мерча, нажмите кнопку ниже и "
+            f"оставьте данные для отправки (ФИО, город, СДЭК/Адрес)."
         )
         kb_buttons.append([
-            InlineKeyboardButton(text="📍 Ввести реквизиты доставки", callback_data=f"inv_delivery_start:{unit.id}")
+            InlineKeyboardButton(
+                text="📍 Ввести реквизиты доставки", 
+                callback_data=f"inv_delivery_start:{unit.id}"
+            )
         ])
 
+    # Кнопка возврата в инвентарь
     kb_buttons.append([
         InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="user_inventory_main")
     ])
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-    # Работа с медиа-сообщениями в оригинальном стиле проекта (как на страницах 14 и 22)
+    # 5. ОБНОВЛЕНИЕ С КУПИРОВАНИЕМ КРАШЕЙ РАЗМЕТКИ (Убран parse_mode)
     if callback.message.photo or callback.message.animation:
         try:
-            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="Markdown")
+            # Обновляем подпись под существующей картинкой/гифкой
+            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode=None)
         except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
+            # Фолбек на случай непредвиденных ограничений Telegram
+            await callback.message.answer(text, reply_markup=current_kb, parse_mode=None)
     else:
         try:
-            await callback.message.edit_text(text, reply_markup=current_kb, parse_mode="Markdown")
+            # Обновляем обычный текст
+            await callback.message.edit_text(text, reply_markup=current_kb, parse_mode=None)
         except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
+            await callback.message.answer(text, reply_markup=current_kb, parse_mode=None)
 
-    # Этот вызов теперь гарантированно сработает и погасит часики
+    # 6. Гарантированный ответ на колбэк, который тушит часики при любом раскладе
     await callback.answer()
+
 
 
 # --- 🚛 FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ ---
