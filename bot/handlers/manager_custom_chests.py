@@ -12,7 +12,8 @@ from sqlalchemy.orm import joinedload
 from config import settings
 from database.models import User, ChatConfig, ShopItem, StockUnit, SystemSettings
 from database.models import CustomChest, CustomChestReward
-from bot.states import ManagerCustomChestSetup, ManagerCustomRewardSetup
+# ИСПРАВЛЕНО: Добавили легитимный класс ManagerChestSettings
+from bot.states import ManagerCustomChestSetup, ManagerCustomRewardSetup, ManagerChestSettings
 
 router = Router(name="manager_custom_chests_router")
 logger = logging.getLogger(__name__)
@@ -30,7 +31,7 @@ async def cmd_custom_chests_main(
     
     page = 1
     if callback.data.startswith("cc_list_page:"):
-        page = int(callback.data.split(":")[1]) # ИСПРАВЛЕНО: Добавлен индекс [1]
+        page = int(callback.data.split(":")[1])
     
     limit = 4
     offset = (page - 1) * limit
@@ -80,25 +81,22 @@ async def process_cc_name(message: Message, state: FSMContext):
     await state.set_state(ManagerCustomChestSetup.waiting_for_description)
     await message.answer("📢 **Шаг 2:** Введите **Описание / Анонс** для чата группы:")
 
-# ВМЕСТО ПЕРЕХОДА К МЕДИА — ИДЕМ В НАСТРОЙКУ ЭКОНОМИКИ И ЦЕНЗОВ
 @router.message(ManagerCustomChestSetup.waiting_for_description)
 async def process_cc_desc(message: Message, state: FSMContext):
     await state.update_data(cc_desc=message.text.strip())
-    
-    # Создаем новое динамическое состояние для цены (или используем существующее, если есть)
-    # Если в bot/states.py нет waiting_for_price, aiogram 3 позволяет использовать кастомные строки или дописать в states.py
-    await state.set_state(ManagerCustomChestSetup.waiting_for_chest_price) 
-    await message.answer(f"💰 **Шаг 3 [Цена]:** Введите стоимость ключа для открытия сундука в {settings.CURRENCY_NAME} (целое число, `0` если бесплатно):")
+    # ИСПРАВЛЕНО: Используем легитимный стейт цены из твоего states.py
+    await state.set_state(ManagerChestSettings.waiting_for_chest_price) 
+    await message.answer(f"💰 **Шаг 3 [Цена]:** Введите стоимость открытия сундука в {settings.CURRENCY_NAME} (целое число, `0` если бесплатно):")
 
-@router.message(ManagerCustomChestSetup.waiting_for_chest_price)
+@router.message(ManagerChestSettings.waiting_for_chest_price)
 async def process_cc_price_save(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
         await message.answer("❌ Введите целое число:")
         return
     await state.update_data(cc_price=int(message.text.strip()))
     
-    # Шаг выбора минимального титула инлайн-кнопками
-    await state.set_state(ManagerCustomChestSetup.waiting_for_chest_min_title)
+    # ИСПРАВЛЕНО: Используем легитимный стейт титула из твоего states.py
+    await state.set_state(ManagerChestSettings.waiting_for_chest_min_title)
     
     titles = settings.parsed_titles
     kb_buttons = []
@@ -107,37 +105,33 @@ async def process_cc_price_save(message: Message, state: FSMContext):
         
     await message.answer("🎖️ **Шаг 4 [Титул]:** Выберите минимальный ранг активности для открытия этого сундука:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons))
 
-@router.callback_query(ManagerCustomChestSetup.waiting_for_chest_min_title, F.data.startswith("cc_title_set:"))
+@router.callback_query(ManagerChestSettings.waiting_for_chest_min_title, F.data.startswith("cc_title_set:"))
 async def process_cc_title_save(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     title_id = int(callback.data.split(":")[1])
     await state.update_data(cc_min_title=title_id)
     
-    # Шаг выбора обязательного предмета-пропуска (билета) из CRM магазина
+    # Шаг выбора обязательного предмета-пропуска (билета) из CRM склада
     items_q = select(ShopItem).where(ShopItem.is_deleted == False)
     shop_items = (await db_session.execute(items_q)).scalars().all()
     
     kb_buttons = []
-    # Опция "Без пропуска"
     kb_buttons.append([InlineKeyboardButton(text="🔓 Открыть без билета/пропуска (свободный вход)", callback_data="cc_ticket_set:none")])
     
     for item in shop_items:
         kb_buttons.append([InlineKeyboardButton(text=f"🔑 {item.name}", callback_data=f"cc_ticket_set:{item.id}")])
         
-    # Переводим в промежуточное состояние (или удерживаем текущее, фильтруя колбэк)
-    # Назовем состояние условно или используем менеджерское
-    await state.set_state(ManagerCustomChestSetup.waiting_for_random_hours) # используем как заглушку для выбора пропуска
+    # ИСПРАВЛЕНО: Используем waiting_for_media как легитимный стейт-заглушку перед финальным сбором фото
+    await state.set_state(ManagerCustomChestSetup.waiting_for_media) 
     await callback.message.edit_text("🔑 **Шаг 5 [Пропуск]:** Выберите предмет на Складе, который спишется как билет-пропуск при открытии сундука:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons))
     await callback.answer()
 
-@router.callback_query(ManagerCustomChestSetup.waiting_for_random_hours, F.data.startswith("cc_ticket_set:"))
+@router.callback_query(ManagerCustomChestSetup.waiting_for_media, F.data.startswith("cc_ticket_set:"))
 async def process_cc_ticket_save(callback: CallbackQuery, state: FSMContext):
     ticket_val = callback.data.split(":")[1]
-    # Если none — запишем 0 или None
     ticket_id = int(ticket_val) if ticket_val != "none" else None
     await state.update_data(cc_required_item_id=ticket_id)
     
-    # ТЕПЕРЬ ПЕРЕХОДИМ К ЗАГРУЗКЕ МЕДИА С КОНСТРУКТОРА ОРИГИНАЛА
-    await state.set_state(ManagerCustomChestSetup.waiting_for_media)
+    # Теперь FSM остается в waiting_for_media и готов принять картинку от админа
     skip_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏩ Пропустить медиа (только текст)", callback_data="cc_skip_media")]
     ])
@@ -552,3 +546,108 @@ async def process_cc_user_open(
         return
         
     opened_custom_chests_cache.add(unique_lock_key)
+
+    # --- ПРОДОЛЖЕНИЕ ХЭНДЛЕРА CC_USER_OPEN (ВЫДАЧА НАГРАДЫ) ---
+    # Код вставляется строго под строкой: opened_custom_chests_cache.add(unique_lock_key)
+    try:
+        # Скрываем инлайн-кнопку из чата группы для фиксации финиша
+        await callback.message.edit_reply_markup(reply_markup=None)
+        await callback.message.reply(
+            f"🎁 **Кастомный сундук успешно открыт!**\n\n"
+            f"👤 **Счастливчик:** {callback.from_user.mention_html()}\n"
+            f"✨ Награда отправлена в ваш личный кабинет!",
+            parse_mode="HTML"
+        )
+    except Exception:
+        if unique_lock_key in opened_custom_chests_cache:
+            opened_custom_chests_cache.discard(unique_lock_key)
+        await callback.answer("❌ Ой! Сундук уже успели забрать!", show_alert=True)
+        return
+        
+    # Списываем стоимость открытия в EXP, если она была задана
+    if chest_price > 0:
+        db_user.current_rating -= chest_price
+        
+    # Если сундук требовал билет/ключ — гасим его и переводим в архив
+    if required_item_id and user_ticket:
+        user_ticket.status = "used"
+        user_ticket.serial_or_promo = f"[ИСПОЛЬЗОВАН]: Открыт сундук #{chest_id} от {datetime.now().strftime('%d.%m %H:%M')}"
+    
+    # Вытаскиваем пул наград кастомного сундука
+    r_q = select(CustomChestReward).where(CustomChestReward.chest_id == chest_id)
+    rewards = (await db_session.execute(r_q)).scalars().all()
+    
+    if not rewards:
+        base_coins = 20
+        db_user.current_rating += base_coins
+        db_user.lifetime_rating += base_coins
+        await db_session.commit()
+        try: await callback.bot.send_message(chat_id=db_user.tg_id, text=f"💰 Выигран базовый утешительный приз: +20 {settings.CURRENCY_NAME}!")
+        except Exception: pass
+        await callback.answer()
+        return
+        
+    # Алгоритм случайного выбора награды с учетом весов (вероятностей)
+    population = [r for r in rewards]
+    weights = [r.weight for r in rewards]
+    win_list = random.choices(population, weights=weights, k=1)
+    win_reward = win_list[0]
+    
+    if str(win_reward.reward_type) == "rating":
+        amount = int(win_reward.value)
+        db_user.current_rating += amount
+        db_user.lifetime_rating += amount
+        await db_session.commit()
+        try: await callback.bot.send_message(chat_id=db_user.tg_id, text=f"💰 Вы выиграли: +{amount} {settings.CURRENCY_NAME}!")
+        except Exception: pass
+    else:
+        # Режим Мерча: жесткий No-Code поиск карточки товара на Складе ERP по имени
+        item_q = select(ShopItem).where(and_(ShopItem.name == win_reward.value, ShopItem.is_deleted == False)).limit(1)
+        shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
+        
+        unit = None
+        if shop_item:
+            # Ищем свободную поштучную единицу товара на Складе (статус stock)
+            unit_q = select(StockUnit).where(and_(StockUnit.item_id == shop_item.id, StockUnit.status == "stock")).limit(1)
+            unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+            
+        if unit and shop_item:
+            unit.status = "won"
+            unit.owner_id = db_user.tg_id
+            unit.purchase_source = "chest_custom"
+            unit.serial_or_promo = "" # ИСПРАВЛЕНО: Пустая строка для мгновенной активации ввода реквизитов!
+            await db_session.commit()
+            
+            try:
+                await callback.bot.send_message(
+                    chat_id=db_user.tg_id,
+                    text=f"🎁 **Вы выиграли мерч: {shop_item.name}!**\n\n"
+                         f"🆔 ID предмета: `{unit.id}`.\n"
+                         f"💡 Перейдите в меню 'Мой Инвентарь / Награды', чтобы ввести реквизиты для получения приза.",
+                    parse_mode="Markdown"
+                )
+            except Exception: pass
+        else:
+            # Монетарный фолбек на случай, если админ забыл оприходовать мерч на Склад
+            fallback_coins = 75
+            db_user.current_rating += fallback_coins
+            db_user.lifetime_rating += fallback_coins
+            await db_session.commit()
+            try:
+                await callback.bot.send_message(
+                    chat_id=db_user.tg_id,
+                    text=f"Вы выиграли приз *{win_reward.value}*, но его не оказалось на Складе!\n"
+                         f"Вам начислен утешительный баланс: +{fallback_coins} {settings.CURRENCY_NAME}!",
+                    parse_mode="Markdown"
+                )
+            except Exception: pass
+            
+    await callback.answer()
+
+@router.callback_query(F.data == "cc_cancel")
+@router.callback_query(F.data == "cc_reward_cancel")
+async def process_cc_cancel(callback: CallbackQuery, state: FSMContext):
+    """Сброс FSM сценария конструктора кастомных сундуков."""
+    await state.clear()
+    await callback.message.edit_text("❌ Настройка кастомного сундука отменена менеджером.")
+    await callback.answer()
