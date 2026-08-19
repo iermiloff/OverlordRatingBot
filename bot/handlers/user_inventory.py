@@ -103,13 +103,15 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
     await callback.answer()
 
 
+from aiogram.types import InputMediaPhoto, InputMediaAnimation
+from bot.states import UserInventoryClaimSetup # Гарантируем правильный импорт стейтов
+
 @router.callback_query(F.data.startswith("u_inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
-    """
-    Твой оригинальный рабочий инвентарь.
-    Защищен от None через безопасный getattr(), разметка и картинки не тронуты.
-    """
-    unit_id = int(callback.data.split(":")[1])
+    """Просмотр конкретного предмета с выводом его картинки и исправленной кнопкой."""
+    parts = callback.data.split(":")
+    unit_id = int(parts[1])
+    page = int(parts[2]) if len(parts) > 2 else 1
     
     unit_q = select(StockUnit).where(StockUnit.id == unit_id)
     unit = (await db_session.execute(unit_q)).scalar_one_or_none()
@@ -129,115 +131,120 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     )
 
     kb_buttons = []
-    
-    # Безопасно извлекаем строку. Если там None, запишется пустая строка, которая не упадет на startswith
     promo_value = getattr(unit, 'serial_or_promo', '') or ''
 
-    # --- ТВОЯ ИЗНАЧАЛЬНАЯ ЛОГИКА ВЕТВЛЕНИЯ ---
+    # Логика статусов
     if promo_value.startswith("[ЗАЯВКА]:"):
         delivery_info = promo_value.replace("[ЗАЯВКА]:", "").strip()
-        text += f"⏳ **Статус:** Ожидает отправки менеджером\n📍 **Ваши реквизиты:**\n_{delivery_info}_"
-
+        text += f"⏳ **Статус:** Ожидает обработки менеджером\n📍 **Ваши реквизиты:**\n_{delivery_info}_"
     elif promo_value.startswith("[ВЫДАНО]:"):
         archive_info = promo_value.replace("[ВЫДАНО]:", "").strip()
         text += f"✅ **Статус:** Доставлено / Выдано\nℹ️ **Информация от админа:**\n_{archive_info}_"
-
     elif promo_value != '':
         text += f"🔑 **Ваш промокод / Ключ активации:**\n`{unit.serial_or_promo}`"
-
     else:
-        # Сюда залетает пустой физический мерч из сундуков
         text += (
-            f"🛑 **Статус:** Реквизиты доставки не заполнены.\n\n"
-            f"💡 Для получения этого физического мерча, нажмите кнопку ниже и "
-            f"оставьте данные для отправки (ФИО, город, СДЭК/Адрес)."
+            f"🛑 **Статус:** Реквизиты для получения не заполнены.\n\n"
+            f"💡 Для получения этой награды, нажмите кнопку ниже и "
+            f"оставьте данные (ФИО/Адрес для мерча или крипто-кошелек)."
         )
+        # ИСПРАВЛЕНО: Префикс u_inv_claim для точного перехвата хэндлером
         kb_buttons.append([
-            InlineKeyboardButton(text="📍 Ввести реквизиты доставки", callback_data=f"inv_delivery_start:{unit.id}")
+            InlineKeyboardButton(text="📍 Ввести реквизиты для получения", callback_data=f"u_inv_claim:{unit.id}")
         ])
 
+    # Кнопка возврата с сохранением страницы пагинации
     kb_buttons.append([
-        InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="user_inventory_main")
+        InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data=f"u_inv_page:{page}")
     ])
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-    # Твоя оригинальная работа с медиа (картинки и гифки)
-    if callback.message.photo or callback.message.animation:
-        try:
-            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
-    else:
-        try:
-            await callback.message.edit_text(text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
+    # ВЫВОД КАРТИНКИ: Проверяем, загружена ли картинка/гифка в ShopItem (поле image или photo)
+    # В зависимости от структуры твоей модели ShopItem, замени shop_item.image на нужное поле
+    item_image = getattr(shop_item, 'image', None) or getattr(shop_item, 'photo', None)
 
+    if item_image:
+        # Если у товара есть картинка — удаляем текстовое меню списка и шлем красивую медиа-карточку
+        try: await callback.message.delete()
+        except Exception: pass
+        
+        # Проверяем по расширению, картинка это или гифка
+        if str(item_image).endswith('.gif'):
+            await callback.message.answer_animation(animation=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
+        else:
+            await callback.message.answer_photo(photo=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
+    else:
+        # Если картинки нет, плавно редактируем текст на месте
+        try:
+            await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
+        except Exception:
+            await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="Markdown")
+            
     await callback.answer()
 
-# --- 🚛 FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ ---
 
+# --- FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ (ИСПРАВЛЕНО) ---
 @router.callback_query(F.data.startswith("u_inv_claim:"))
 async def process_user_inventory_claim_start(callback: CallbackQuery, state: FSMContext):
-    """Инициализация FSM-сбора реквизитов доставки для выигранного/купленного мерча."""
+    """Инициализация FSM-сбора реквизитов получения."""
     parts = callback.data.split(":")
-    
     unit_id = int(parts[1])
     
+    # Сохраняем ID предмета в текущий контекст FSM
     await state.update_data(claim_unit_id=unit_id)
-    
-    from bot.states import UserInventoryClaimSetup # Проверь имя своего класса стейтов
     await state.set_state(UserInventoryClaimSetup.waiting_for_address)
-
+    
     try: await callback.message.delete()
     except Exception: pass
     
     await callback.message.answer(
-        "📦 **Оформление получения награды**\n\n"
-        "• Если это **вещевой мерч**, пожалуйста, введите адрес доставки СДЭК, "
-        "ФИО и ваш контактный номер телефона одной строкой.\n"
-        "• Если это **цифровой ваучер/крипта**, введите адрес вашего кошелька.\n\n"
-        "📝 Отправьте ваши реквизиты сообщением в чат бота:"
+        " **Оформление получения награды**\n\n"
+        f"• Если это **вещевой мерч**, введите адрес доставки СДЭК, ФИО и телефон одной строкой.\n"
+        f"• Если это **цифровой ваучер или криптовалюта**, введите адрес вашего кошелька и сеть.\n\n"
+        " Отправьте ваши реквизиты ответным сообщением в чат бота:"
     )
     await callback.answer()
 
-@router.message(F.state == "UserPurchaseSetup:waiting_for_delivery")
-async def process_u_inv_setup_delivery_save(
-    message: Message, state: FSMContext, db_session: AsyncSession
-):
-    """Сохранение реквизитов и активация заявки в админ-очереди."""
+
+# ХЭНДЛЕР ПРИЕМА ТЕКСТА РЕКВИЗИТОВ (ИСПРАВЛЕНО СОСТОЯНИЕ)
+@router.message(UserInventoryClaimSetup.waiting_for_address)
+async def process_u_inv_setup_delivery_save(message: Message, state: FSMContext, db_session: AsyncSession):
+    """Сохранение реквизитов и активация заявки в базе данных."""
     delivery_text = message.text.strip()
     data = await state.get_data()
-    unit_id = data.get("setup_unit_id")
-    page = data.get("setup_page")
+    unit_id = data.get("claim_unit_id") # Берем правильный ключ из кэша
     
     unit = await db_session.get(StockUnit, unit_id)
-    if not unit or unit.serial_or_promo != "[НЕ ОФОРМЛЕНО]":
-        await message.answer("❌ Ошибка! Товар уже оформлен или не найден.")
+    
+    # Проверяем, что предмет реален и еще не оформлен (поле пустое или None)
+    if not unit or (unit.serial_or_promo and unit.serial_or_promo != ""):
+        await message.answer("❌ Ошибка! Товар уже оформлен или не найден в системе.")
         await state.clear()
         return
         
-    # ПЕРЕВОДИМ В СТАТУС АКТИВНОЙ ЗАЯВКИ ДЛЯ ОЧЕРЕДИ АДМИНА
+    # Переводим предмет в статус активной заявки для CRM менеджеров
     unit.serial_or_promo = f"[ЗАЯВКА]: {delivery_text}"
     await db_session.commit()
     await state.clear()
     
     await message.answer(
-        "🎉 **Реквизиты успешно сохранены!**\n\n"
-        "Заявка передана администрации и встала в очередь на отправку. "
-        "Вы получите уведомление в этот чат, как только статус изменится."
+        " **Реквизиты успешно сохранены!**\n\n"
+        "Заявка передана администрации. Менеджеры проверят реквизиты и отправят ваш приз. "
+        "Вы получите уведомление в этот чат, как только статус изменится!"
     )
     
-    # Анонсируем менеджерам о новой заполненной заявке
+    # Мгновенное CRM-уведомление администраторам в личку
     for manager_id in settings.managers_list:
         try:
             item_name = unit.item.name if unit.item else "Мерч"
             await message.bot.send_message(
                 chat_id=manager_id,
-                text=f"📥 **Пользователь оформил заявку из Инвентаря!**\n\n"
-                     f"📦 Товар: *{item_name}* (ID единицы: {unit.id})\n"
-                     f"📋 **Реквизиты:** `{delivery_text}`",
-                parse_mode="Markdown"
+                text=f" **Новая заявка на получение приза из Инвентаря!**\n\n"
+                     f"**Пользователь:** {message.from_user.mention_html()}\n"
+                     f" **Товар:** *{item_name}* (ID единицы: {unit.id})\n"
+                     f" **Реквизиты:** `{delivery_text}`",
+                parse_mode="HTML"
             )
-        except Exception: pass
+        except Exception: 
+            pass
