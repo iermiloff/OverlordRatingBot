@@ -28,7 +28,7 @@ def get_main_router() -> Router:
     main_router.include_router(manager_users_router)
     main_router.include_router(manager_shop_router)
     main_router.include_router(manager_antifraud_router)
-    main_router.include_router(manager_activities_router)
+    #main_router.include_router(manager_activities_router)
     main_router.include_router(manager_giveaways_router)
     main_router.include_router(manager_settings_router)
     main_router.include_router(custom_chests_router)
