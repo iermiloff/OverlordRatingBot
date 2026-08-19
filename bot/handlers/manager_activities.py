@@ -147,8 +147,9 @@ async def process_reward_type_choice(
     chosen_type = callback.data.split(":")[1]
     await state.update_data(reward_type=chosen_type)
     
+    await state.set_state(ManagerActivitySetup.waiting_for_reward_value)
+    
     if chosen_type == "rating":
-        await state.set_state(ManagerActivitySetup.waiting_for_reward_value)
         prompt = (
             f"Введите **количество {settings.CURRENCY_NAME}**, "
             f"которое получит юзер (целое число):"
@@ -158,15 +159,17 @@ async def process_reward_type_choice(
             parse_mode="Markdown"
         )
     else:
-        # ЖЕСТКИЙ ВЫБОР МЕРЧА ИЗ БАЗЫ ДАННЫХ
+        # Жесткий выбор мерча из базы данных
         items_q = select(ShopItem).where(ShopItem.is_deleted == False)
         shop_items = (await db_session.execute(items_q)).scalars().all()
         
         if not shop_items:
             await callback.answer("❌ На складе нет созданных товаров! Сначала добавьте мерч в CRM магазина.", show_alert=True)
+            # Сбрасываем состояние, если не из чего выбирать
+            await state.clear()
             return
             
-        # Строим клавиатуру из существующих товаров
+        # Строим инлайн-клавиатуру из существующих на складе товаров
         kb_buttons = []
         for item in shop_items:
             kb_buttons.append([
@@ -175,27 +178,29 @@ async def process_reward_type_choice(
         kb_buttons.append([InlineKeyboardButton(text="❌ Отмена", callback_data="act_cancel")])
         merch_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
         
-        # Переводим в новое промежуточное состояние (или оставляем то же, но ловим callback)
-        await state.set_state(ManagerActivitySetup.waiting_for_reward_value)
         await callback.message.edit_text(
             " **Настройка сундука [Шаг 2/3]**\n\nВыберите **товар/мерч** из списка существующих на Складе:",
             reply_markup=merch_kb
         )
     await callback.answer()
 
-@router.callback_query(ManagerActivitySetup.waiting_for_rating_or_merch_value, F.data.startswith("act_merch_select:"))
+@router.callback_query(
+    ManagerActivitySetup.waiting_for_reward_value, 
+    F.data.startswith("act_merch_select:")
+)
 async def process_reward_merch_callback(callback: CallbackQuery, state: FSMContext):
-    # Извлекаем точное имя выбранного товара
-    merch_name = callback.data.split("act_merch_select:")[1]
+    # Достаем имя выбранного мерча из callback_data
+    merch_name = callback.data.split(":")[1]
     
     await state.update_data(reward_value=merch_name)
     await state.set_state(ManagerActivitySetup.waiting_for_reward_weight)
     
     await callback.message.edit_text(
-        f" Выбран мерч: **{merch_name}**\n\n**Настройка [Шаг 3/3]**\nУкажите **вес выпадения** (отправьте число сообщением):",
+        f" Выбран мерч: **{merch_name}**\n\n**Настройка [Шаг 3/3]**\nУкажите **вес выпадения** сундука (отправьте число сообщением):",
         parse_mode="Markdown"
     )
     await callback.answer()
+
 
 @router.message(ManagerActivitySetup.waiting_for_reward_value)
 async def process_reward_value(message: Message, state: FSMContext):
