@@ -169,18 +169,28 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-    if callback.message.photo or callback.message.animation:
-        try:
-            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
-    else:
-        try:
-            await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
+    if shop_item:
+        print(f"!!! РЕАЛЬНЫЕ ПОЛЯ ТОВАРА СУДЯ ПО БАЗЕ ДАННЫХ: {list(shop_item.__dict__.keys())} !!!", flush=True)
 
-    await callback.answer()
+    # Безопасный поиск поля картинки: проверяем самые частые варианты в твоем проекте
+    item_image = None
+    if unit.item:
+        for attr in ['photo_id', 'image_url', 'image', 'photo', 'media_id']:
+            if hasattr(unit.item, attr) and getattr(unit.item, attr):
+                item_image = getattr(unit.item, attr)
+                break
+
+    if item_image:
+        try: await callback.message.delete()
+        except Exception: pass
+        
+        if str(item_image).endswith('.gif'):
+            await callback.message.answer_animation(animation=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
+        else:
+            await callback.message.answer_photo(photo=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
+    else:
+        try: await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
+        except Exception: await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="Markdown")
 
 
 @router.callback_query(F.data.startswith("u_inv_claim:"))
