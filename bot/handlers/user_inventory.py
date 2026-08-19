@@ -106,10 +106,7 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
 
 @router.callback_query(F.data.startswith("inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
-    """
-    Абсолютно надежный просмотр карточки предмета. 
-    Исключены любые ошибки парсинга разметки Telegram API.
-    """
+    print(f"!!! НАЖАТИЕ ПОЙМАНО: {callback.data} !!!", flush=True)
     unit_id = int(callback.data.split(":"))
     
     # 1. Получаем единицу товара
