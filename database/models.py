@@ -135,8 +135,9 @@ class Giveaway(Base):
     reward_type = Column(String(32), nullable=False) # 'rating' или 'item' (из ShopItem)
     reward_value = Column(String(128), nullable=False)
     winners_count = Column(Integer, nullable=False)
-    condition_type = Column(String(32), default="title", nullable=False) # 'title' или 'ticket'
-    condition_value = Column(String(64), nullable=False) # ID титула или ID товара-билета
+    condition_type = Column(String(32), default="free", nullable=False)
+    condition_value = Column(String(64), nullable=True) # ID билета, если тип 'ticket'
+    min_title_id = Column(Integer, default=1, nullable=False)
     announce_at = Column(DateTime, nullable=False)
     finalize_at = Column(DateTime, nullable=False)
     status = Column(String(32), default="created", nullable=False) # 'created', 'announced', 'finished'
