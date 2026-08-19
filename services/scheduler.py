@@ -83,40 +83,65 @@ async def check_and_send_random_chests(bot: Bot):
 
 
 async def finalize_active_giveaways(bot: Bot):
-    """Двухфазный планировщик лотерей: авто-анонсы и подведение итогов."""
     async with AsyncSessionLocal() as session:
         now = datetime.utcnow()
         
-        # --- ФАЗА 1: АВТО-ПУБЛИКАЦИЯ АНОНСОВ ---
-        announce_q = select(Giveaway).where(and_(Giveaway.announce_at <= now, Giveaway.status == "created"))
+        # --- ФАЗА 1: ЧИСТАЯ ПУБЛИКАЦИЯ АНОНСОВ ---
+        # Ищем новые розыгрыши, время анонса которых подошло
+        announce_q = select(Giveaway).where(
+            and_(Giveaway.announce_at <= now, Giveaway.status == "created")
+        )
         gas_to_announce = (await session.execute(announce_q)).scalars().all()
         
-        chats_q = select(ChatConfig).where(and_(ChatConfig.is_active == True, ChatConfig.platform == "tg"))
+        chats_q = select(ChatConfig).where(
+            and_(ChatConfig.is_active == True, ChatConfig.platform == "tg")
+        )
         active_tg_chats = (await session.execute(chats_q)).scalars().all()
         
         for ga in gas_to_announce:
-            prize = f"💰 {ga.reward_value} монет" if ga.reward_type == "rating" else f"🛍️ Мерч: '{ga.reward_value}'"
+            # 🛡️ ПРЕДОХРАНИТЕЛЬ: Очищаем типы от возможных сырых списков сплита
+            r_type = str(ga.reward_type).replace("[", "").replace("]", "").replace("'", "").split(",")[-1].strip()
+            c_type = str(ga.condition_type).replace("[", "").replace("]", "").replace("'", "").split(",")[-1].strip()
             
-            if ga.condition_type == "ticket":
-                ticket_item = await session.get(ShopItem, int(ga.condition_value))
-                t_lbl = ticket_item.name if ticket_item else "Лотерейный билет"
-                cond_text = f"🎟️ **Вход по билетам:** требуется купить билет **'{t_lbl}'**!"
+            # Корректно определяем приз на основе чистого текстового маркера
+            if "rating" in r_type or r_type == "rating":
+                prize = f"💰 {ga.reward_value} {settings.CURRENCY_NAME}"
             else:
-                t_info = settings.parsed_titles.get(int(ga.condition_value))
-                cond_text = f"💬 **Участие свободное:** ранг не ниже *'{t_info.name if t_info else 'Новичок'}'*!"
+                prize = f"🛍️ Мерч: '{ga.reward_value}'"
+                
+            # Корректно определяем No-Code допуск по билетам или титулам
+            if "ticket" in c_type or c_type == "ticket":
+                ticket_item = await session.get(ShopItem, int(ga.condition_value))
+                t_lbl = ticket_item.name if ticket_item else f"Билет #{ga.condition_value}"
+                cond_text = f"🎟️ **Участие ПЛАТНОЕ:** требуется купить билет **'{t_lbl}'** на Витрине!"
+                
+                # При платном билете сквозной титул берем из min_title_id
+                t_info = settings.parsed_titles.get(int(ga.min_title_id))
+                t_name = t_info.name if t_info else "Новичок"
+            else:
+                ticket_item = None
+                t_info = settings.parsed_titles.get(int(ga.min_title_id))
+                t_name = t_info.name if t_info else "Новичок"
+                cond_text = f"💬 **Участие СВОБОДНОЕ:** просто общайтесь в чатах проекта!"
                 
             for chat in active_tg_chats:
                 try:
                     await bot.send_message(
                         chat_id=chat.id,
-                        text=f"🎉 **СТАРТУЕТ НОВЫЙ РОЗЫГРЫШ!** 🎉\n\n🎁 **Приз:** {prize}\n{cond_text}\n⏳ **Финал (UTC):** {ga.finalize_at.strftime('%d.%m %H:%M')}",
+                        text=f"🎉 **СТАРТУЕТ НОВЫЙ РОЗЫГРЫШ!** 🎉\n\n"
+                             f"🎁 **Приз:** {prize}\n"
+                             f"🎖️ **Минимальный ранг:** не ниже *'{t_name}'*\n"
+                             f"{cond_text}\n\n"
+                             f"⏳ **Финал лотереи (UTC):** {ga.finalize_at.strftime('%d.%m %H:%M')}\n"
+                             f"💬 Планировщик автоматически выберет победителей среди подходящих участников!",
                         parse_mode="Markdown"
                     )
                 except Exception: pass
+                
             ga.status = "active"
+            
         await session.commit()
 
-        # --- ФАЗА 2: ПОДВЕДЕНИЕ ИТОГОВ (БИЛЕТЫ + ТИТУЛЫ) ---
         finalize_q = select(Giveaway).where(
             and_(Giveaway.finalize_at <= now, Giveaway.status == "active")
         )
@@ -125,8 +150,12 @@ async def finalize_active_giveaways(bot: Bot):
         for ga in gas_to_finalize:
             unique_uids = []
             
-            # 1. Сбор первичного пула участников по финансовому признаку
-            if ga.condition_type == "ticket":
+            # Чистим строку условия от списков
+            c_type = str(ga.condition_type).replace("[", "").replace("]", "").replace("'", "").split(",")[-1].strip()
+            r_type = str(ga.reward_type).replace("[", "").replace("]", "").replace("'", "").split(",")[-1].strip()
+            
+            # Вектор А: Лотерея по билетам из Магазина
+            if "ticket" in c_type or c_type == "ticket":
                 ticket_id = int(ga.condition_value)
                 units_q = select(StockUnit.owner_id).where(
                     and_(
@@ -137,6 +166,7 @@ async def finalize_active_giveaways(bot: Bot):
                 )
                 raw_buyers = (await session.execute(units_q)).scalars().all()
                 unique_uids = list(set(raw_buyers))
+            # Вектор Б: Лотерея свободная по логам активности чата
             else:
                 logs_q = select(ActivityLog.user_id).where(
                     and_(
@@ -153,22 +183,19 @@ async def finalize_active_giveaways(bot: Bot):
                 await session.commit()
                 continue
                 
-            # 2. СКВОЗНАЯ ГИБРИДНАЯ ФИЛЬТРАЦИЯ ПО МИНИМАЛЬНОМУ ТИТУЛУ ОПЫТА
+            # СКВОЗНОЙ ЦЕНЗ ПО ТИТУЛАМ ОПЫТА ДЛЯ ОБОИХ ВЕКТОРОВ
             eligible_users = []
-            req_title_id = int(ga.min_title_id) # Твой сквозной ценз ранга
+            req_title_id = int(ga.min_title_id)
             
             for uid in unique_uids:
                 u = await session.get(User, uid)
                 if not u or u.is_banned: continue
                 
-                # Вычисляем текущий No-Code левел юзера по его XP
                 u_title_id = 1
                 for t in sorted(settings.parsed_titles.values(), key=lambda x: x.min_rating, reverse=True):
                     if u.lifetime_rating >= t.min_rating:
                         u_title_id = t.id
                         break
-                        
-                # Проверка: юзер должен проходить и по билету, и по уровню ранга чата!
                 if u_title_id >= req_title_id:
                     eligible_users.append(u)
                     
@@ -177,20 +204,19 @@ async def finalize_active_giveaways(bot: Bot):
                 await session.commit()
                 continue
                 
-            # Безопасный рандомный выбор sample против зависания CPU
             actual_winners_count = min(len(eligible_users), ga.winners_count)
             winners = random.sample(eligible_users, k=actual_winners_count)
             
-            # 3. Выдача заслуженных призов победителям конвейера
+            # Начисление заслуженных призов
             for winner in winners:
-                if ga.reward_type == "rating":
+                if "rating" in r_type or r_type == "rating":
                     amount = int(ga.reward_value)
                     winner.current_rating += amount
                     winner.lifetime_rating += amount
                     try:
                         await bot.send_message(
                             chat_id=winner.tg_id,
-                            text=f"🎉 **Вы выиграли в лотерее!**\n"
+                            text=f"🎉 **Вы выиграли в лотерее Оверлорда!**\n"
                                  f"Награда: +{amount} {settings.CURRENCY_NAME} зачислена."
                         )
                     except Exception: pass
@@ -211,11 +237,11 @@ async def finalize_active_giveaways(bot: Bot):
                         unit.status = "won"
                         unit.owner_id = winner.tg_id
                         unit.purchase_source = "giveaway"
-                        unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]" # Твой фикс анти-скама
+                        unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]"
                         try:
                             await bot.send_message(
                                 chat_id=winner.tg_id,
-                                text=f"🎉 **Вы выиграли главный приз: {shop_item.name}!**\n"
+                                text=f"🎉 **Вы выиграли приз: {shop_item.name}!**\n"
                                      f"Зайдите в '🎒 Мой Инвентарь' для оформления доставки.",
                                 parse_mode="Markdown"
                             )
@@ -227,13 +253,14 @@ async def finalize_active_giveaways(bot: Bot):
                         try:
                             await bot.send_message(
                                 chat_id=winner.tg_id,
-                                text=f"🎁 На складе не оказалось приза '{ga.reward_value}'. "
+                                text=f"🎁 На складе не оказалось мерча '{ga.reward_value}'. "
                                      f"Вам начислена компенсация: +{fallback_coins} поинтов!",
                                 parse_mode="Markdown"
                             )
                         except Exception: pass
 
-            if ga.condition_type == "ticket":
+            # АТОМАРНОЕ АННУЛИРОВАНИЕ БИЛЕТОВ
+            if "ticket" in c_type or c_type == "ticket":
                 burn_stmt = update(StockUnit).where(
                     and_(StockUnit.item_id == int(ga.condition_value), StockUnit.status == "sold")
                 ).values(status="spent", serial_or_promo=f"[ИСПОЛЬЗОВАН В ЛОТЕРЕЕ #{ga.id}]")
@@ -252,15 +279,13 @@ async def finalize_active_giveaways(bot: Bot):
                         parse_mode="Markdown"
                     )
                 except Exception: pass
+                
         await session.commit()
-        
-# --- 🚀 ИНИЦИАЛИЗАЦИЯ И ТИКИ ПЛАНИРОВЩИКА ---
+
 
 def start_scheduler(bot: Bot):
     """Регистрирует минутные задачи интервального сканирования Беты."""
-    # Защита от двойного старта воркеров
     if not scheduler.running:
-        # Ежеминутно проверяем заброс сундуков активности
         scheduler.add_job(
             check_and_send_random_chests,
             "interval",
@@ -269,7 +294,6 @@ def start_scheduler(bot: Bot):
             id="check_and_send_random_chests",
             replace_existing=True
         )
-        # Ежеминутно подводим итоги лотерей
         scheduler.add_job(
             finalize_active_giveaways,
             "interval",
@@ -280,4 +304,5 @@ def start_scheduler(bot: Bot):
         )
         scheduler.start()
         logger.info("⏰ Кроссплатформенный планировщик APScheduler успешно запущен.")
+
 
