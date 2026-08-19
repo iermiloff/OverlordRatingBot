@@ -108,13 +108,14 @@ async def process_ga_winners(message: Message, state: FSMContext):
     F.data.startswith("mg_ga_title:")
 )
 async def process_ga_title(callback: CallbackQuery, state: FSMContext):
-    t_id = int(callback.data.split(":"))
+    t_id = int(callback.data.split(":")[1])
     await state.update_data(ga_title=t_id)
     await state.set_state(ManagerGiveawaySetup.waiting_for_duration)
     await callback.message.edit_text(
         "🎉 **Шаг 5/5:** Через сколько **МИНУТ** подвести итоги?"
     )
     await callback.answer()
+
 
 @router.message(ManagerGiveawaySetup.waiting_for_duration)
 async def process_ga_duration(
