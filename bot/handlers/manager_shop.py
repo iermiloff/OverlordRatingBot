@@ -647,30 +647,53 @@ async def process_manager_order_manage_card(
 async def process_manager_order_close(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
-    """Атомарное закрытие заявки и перевод в статус выполненных."""
+    """Закрытие заявки менеджером: перевод в архив и уведомление пользователя."""
     if not is_manager: return
+    
     parts = callback.data.split(":")
     unit_id = int(parts[1])
     page = int(parts[2])
     
-    unit = await db_session.get(StockUnit, unit_id)
-    if unit and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
-        # Переводим метку в состояние архивной выдачи
-        unit.serial_or_promo = unit.serial_or_promo.replace("[ЗАЯВКА]:", "[ВЫДАНО]:")
-        await db_session.commit()
-        await callback.answer("✅ Заявка успешно закрыта и убрана из очереди!", show_alert=True)
-        
-        # Оповещаем пользователя в ЛС, если это возможно
-        try:
-            item_name = unit.item.name if unit.item else "Товар"
-            await callback.bot.send_message(
-                chat_id=unit.owner_id,
-                text=f"🎉 **Ваш заказ '{item_name}' (ID: {unit.id}) успешно отправлен/выдан администрацией!**"
-            )
-        except Exception: pass
-        
+    # Загружаем заявку вместе с данными товара
+    unit_q = select(StockUnit).options(joinedload(StockUnit.item)).where(StockUnit.id == unit_id)
+    unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+    
+    if not unit:
+        await callback.answer("❌ Заявка не найдена.", show_alert=True)
+        return
 
+    user_id = unit.owner_id
+    item_name = unit.item.name if unit.item else "Мерч"
+    
+    # 1. Меняем статус на [ВЫДАНО] внутри текста реквизитов
+    old_reqs = str(unit.serial_or_promo).replace("[ЗАЯВКА]:", "").strip()
+    unit.serial_or_promo = f"[ВЫДАНО]: {old_reqs}"
+    
+    # 2. МЕНЯЕМ СТАТУС НА 'archived', чтобы убрать из основного инвентаря юзера!
+    unit.status = "archived" 
+    
+    await db_session.commit()
+    
+    # 3. ОТПРАВЛЯЕМ ОПОВЕЩЕНИЕ ПОЛЬЗОВАТЕЛЮ
+    try:
+        await callback.bot.send_message(
+            chat_id=user_id,
+            text=(
+                f"🎉 **Ваша награда отправлена!**\n\n"
+                f"📦 **Предмет:** {item_name}\n"
+                f"ℹ️ **Статус:** Заявка успешно обработана менеджером. "
+                f"Ожидайте прибытия посылки (СДЭК) или проверяйте ваш криптовалютный кошелек!"
+            ),
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.warning(f"Не удалось отправить уведомление пользователю {user_id}: {e}")
+
+    await callback.answer("✅ Заявка успешно закрыта и заархивирована!", show_alert=True)
+    
+    # 4. Безопасный возврат в очередь без мутации frozen-объекта
     fake_callback = callback.model_copy(update={"data": f"mg_orders_queue:{page}"})
     await cmd_manager_orders_queue(fake_callback, is_manager, db_session)
+
 
 
