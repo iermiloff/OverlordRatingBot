@@ -21,22 +21,72 @@ def parse_manager_time(text_input: str, user_tz: str) -> datetime:
     return local_dt.astimezone(zoneinfo.ZoneInfo("UTC")).replace(tzinfo=None)
 
 
-@router.callback_query(F.data == "mg_giveaway_create_start")
-async def process_mg_giveaway_create_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
-    """Инициализация пошагового создания розыгрыша из главного меню админки."""
+# --- 📊 ГЛАВНАЯ No-Code ПАНЕЛЬ УПРАВЛЕНИЯ РОЗЫГРЫШАМИ ---
+
+@router.callback_query(F.data == "mg_giveaways_main_menu")
+async def cmd_manager_giveaways_dashboard(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    """Вывод панели лотерей: просмотр активных и запуск новых."""
     if not is_manager: return
     
+    # Атомарно считаем, сколько лотерей сейчас крутится в базе в статусах ожидания или сбора логов
+    active_q = select(Giveaway).where(Giveaway.status.in_(["created", "active"]))
+    active_gas = (await db_session.execute(active_q)).scalars().all()
+    
+    text = (
+        "🎉 **No-Code Панель Управления Лотереями**\n\n"
+        "Здесь вы можете планировать умные розыгрыши с привязкой к билетам "
+        "из магазина и несгораемым титулам чата. Все таймеры работают строго по UTC.\n\n"
+        f"🔥 Сейчас запущено/запланировано лотерей: **{len(active_gas)}** шт."
+    )
+    
+    # Формируем аккуратную инлайн-сетку кнопок управления
+    kb = [
+        [
+            InlineKeyboardButton(text="➕ Запланировать новый розыгрыш", callback_data="mg_giveaway_create_start")
+        ]
+    ]
+    
+    # Добавляем в ленту кнопки быстрых карточек активных лотерей (если они есть)
+    for ga in active_gas:
+        status_lbl = "📡 Ждет анонса" if ga.status == "created" else "⏳ Идет сбор логов"
+        kb.append([
+            InlineKeyboardButton(
+                text=f"🎁 #{ga.id} | {ga.reward_value} ({status_lbl})",
+                callback_data=f"mg_ga_view_card:{ga.id}"
+            )
+        ])
+        
+    kb.append([InlineKeyboardButton(text=" Вернуться в корень админки", callback_data="main_menu_manager")])
+    
+    await callback.message.edit_text(
+        text=text,
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb),
+        parse_mode="Markdown"
+    )
+    await callback.answer()
+
+
+
+@router.callback_query(F.data == "mg_giveaway_create_start")
+async def process_mg_giveaway_create_start(callback: CallbackQuery, is_manager: bool, state: FSMContext):
+    """Перенаправленный стартер шагов конструктора."""
+    if not is_manager: return
+    
+    # Жестко включаем стейт Шага 1
     await state.set_state(ManagerGiveawaySetup.waiting_for_type)
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="💰 Валюта (Рейтинг)", callback_data="mg_ga_type_set:rating"),
-            InlineKeyboardButton(text="🎒 Вещевой Мерч", callback_data="mg_ga_type_set:item")
+            InlineKeyboardButton(text=" Валюта (Рейтинг)", callback_data="mg_ga_type_set:rating"),
+            InlineKeyboardButton(text=" Мерч/Другое", callback_data="mg_ga_type_set:item")
+        ],
+        [
+            InlineKeyboardButton(text="↩️ Назад в меню лотерей", callback_data="mg_giveaways_main_menu")
         ]
     ])
     
     await callback.message.edit_text(
-        "🏆 **Конструктор Лотерей Оверлорда**\n\n"
+        "🏆 **Конструктор Лотерей**\n\n"
         "**Шаг 1/5:** Выберите тип награды для участников чата:",
         reply_markup=kb
     )
@@ -54,7 +104,7 @@ async def process_ga_type_choice(callback: CallbackQuery, state: FSMContext):
     if ga_type == "rating":
         prompt = "Введите **количество поинтов**, которое получит победитель (целое число):"
     else:
-        prompt = "Введите **название товара**, как оно написано на Складе ERP (например: `Худи Оверлорда`):"
+        prompt = "Введите **название товара**, как оно написано на Складе ERP (например: `Худи а не Хули`):"
         
     await callback.message.edit_text(f"🎁 **Шаг 2/5:** {prompt}")
     await callback.answer()
