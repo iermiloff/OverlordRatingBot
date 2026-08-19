@@ -103,9 +103,13 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("inv_view:"))
+@@router.callback_query(F.data.startswith("inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
-    unit_id = int(callback.data.split(":")[1]) # Извлекаем ID по индексу 1
+    """
+    Твой оригинальный рабочий инвентарь.
+    Защищен от None через безопасный getattr(), разметка и картинки не тронуты.
+    """
+    unit_id = int(callback.data.split(":")[1])
     
     unit_q = select(StockUnit).where(StockUnit.id == unit_id)
     unit = (await db_session.execute(unit_q)).scalar_one_or_none()
@@ -117,7 +121,6 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     item_q = select(ShopItem).where(ShopItem.id == unit.item_id)
     shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
 
-    # Оригинальная Markdown-карточка твоего проекта
     text = (
         f"📦 **Предмет:** {shop_item.name}\n"
         f"📝 **Описание:** {shop_item.description or 'Нет описания'}\n"
@@ -127,27 +130,23 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
 
     kb_buttons = []
     
-    # Считываем значение и защищаем от None/пустых строк
-    val = unit.serial_or_promo
-    val_str = str(val).strip() if val else ""
+    # Безопасно извлекаем строку. Если там None, запишется пустая строка, которая не упадет на startswith
+    promo_value = getattr(unit, 'serial_or_promo', '') or ''
 
-    # --- ТВОЯ ОРИГИНАЛЬНАЯ ЛОГИКА ВЕТВЛЕНИЯ (ИСПРАВЛЕННАЯ И БЕЗОПАСНАЯ) ---
-    if val and val_str.startswith("[ЗАЯВКА]:"):
-        delivery_info = val_str.replace("[ЗАЯВКА]:", "").strip()
+    # --- ТВОЯ ИЗНАЧАЛЬНАЯ ЛОГИКА ВЕТВЛЕНИЯ ---
+    if promo_value.startswith("[ЗАЯВКА]:"):
+        delivery_info = promo_value.replace("[ЗАЯВКА]:", "").strip()
         text += f"⏳ **Статус:** Ожидает отправки менеджером\n📍 **Ваши реквизиты:**\n_{delivery_info}_"
 
-    elif val and val_str.startswith("[ВЫДАНО]:"):
-        archive_info = val_str.replace("[ВЫДАНО]:", "").strip()
+    elif promo_value.startswith("[ВЫДАНО]:"):
+        archive_info = promo_value.replace("[ВЫДАНО]:", "").strip()
         text += f"✅ **Статус:** Доставлено / Выдано\nℹ️ **Информация от админа:**\n_{archive_info}_"
 
-    elif val and val_str != "":
-        # Если в поле РЕАЛЬНО записан цифровой ключ (поле не None и не пустое)
-        text += f"🔑 **Ваш промокод / Ключ активации:**\n`{val}`"
+    elif promo_value != '':
+        text += f"🔑 **Ваш промокод / Ключ активации:**\n`{unit.serial_or_promo}`"
 
     else:
-        # СЮДА ПОПАДАЕТ: 
-        # 1. Значение None (наш мерч из сундука)
-        # 2. Пустая строка ""
+        # Сюда залетает пустой физический мерч из сундуков
         text += (
             f"🛑 **Статус:** Реквизиты доставки не заполнены.\n\n"
             f"💡 Для получения этого физического мерча, нажмите кнопку ниже и "
@@ -157,14 +156,13 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
             InlineKeyboardButton(text="📍 Ввести реквизиты доставки", callback_data=f"inv_delivery_start:{unit.id}")
         ])
 
-    # Кнопка возврата обратно в список инвентаря
     kb_buttons.append([
         InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="user_inventory_main")
     ])
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-    # Оригинальное бесшовное обновление медиа-карточек
+    # Твоя оригинальная работа с медиа (картинки и гифки)
     if callback.message.photo or callback.message.animation:
         try:
             await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="Markdown")
@@ -176,7 +174,6 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
         except Exception:
             await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
 
-    # Гарантированное гашение анимации загрузки
     await callback.answer()
 
 # --- 🚛 FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ ---
