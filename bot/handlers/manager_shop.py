@@ -703,7 +703,7 @@ async def process_manager_order_close(
 async def cmd_manager_orders_archive(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
-    """Просмотр заархивированных (выданных) наград менеджером."""
+    """Просмотр заархивированных наград менеджером с выводом даты и времени обработки на кнопках."""
     if not is_manager: return
     
     page = int(callback.data.split(":")[1])
@@ -724,17 +724,27 @@ async def cmd_manager_orders_archive(
     
     text = (
         "📜 **Архив завершенных выдач**\n\n"
-        f"Всего успешно обработано наград: **{total}** шт.\n\n"
+        "Ниже представлены все успешно обработанные награды.\n"
+        "Нажмите на карточку, чтобы посмотреть полные реквизиты получателя.\n\n"
+        f"Всего успешно обработано наград: **{total}** шт."
     )
     
     buttons = []
     for u in units:
         name = u.item.name if u.item else "Предмет"
+        
+        # ИСПРАВЛЕНО: Форматируем полную дату и время обработки (updated_at) в ДД.ММ | ЧЧ:ММ
+        closed_date_time = u.updated_at.strftime('%d.%m | %H:%M') if u.updated_at else "--.-- | --:--"
+        
+        # Полностью информативная инлайн-кнопка для CRM
         buttons.append([
-            InlineKeyboardButton(text=f"✅ {name} (ID: {u.id})", callback_data=f"mg_archive_view:{u.id}:{page}")
+            InlineKeyboardButton(
+                text=f"🗓️ [{closed_date_time}] {name} (ID: {u.id})", 
+                callback_data=f"mg_archive_view:{u.id}:{page}"
+            )
         ])
         
-    # Стрелочки пагинации для архива
+    # Навигация архива
     nav_row = []
     if page > 1:
         nav_row.append(InlineKeyboardButton(text=" Назад", callback_data=f"mg_orders_archive:{page-1}"))
@@ -746,4 +756,58 @@ async def cmd_manager_orders_archive(
     
     await callback.message.edit_text(text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown")
     await callback.answer()
+
+
+
+@router.callback_query(F.data.startswith("mg_archive_view:"))
+async def process_manager_archive_view_card(
+    callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
+):
+    """Детальный просмотр закрытой архивной заявки."""
+    if not is_manager: return
+    
+    parts = callback.data.split(":")
+    unit_id = int(parts[1])
+    page = int(parts[2])
+    
+    # Загружаем архивный юнит вместе со связью товара
+    unit_q = select(StockUnit).options(joinedload(StockUnit.item)).where(StockUnit.id == unit_id)
+    unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+    
+    if not unit:
+        await callback.answer("❌ Запись не найдена в архиве.", show_alert=True)
+        return
+        
+    item_name = unit.item.name if unit.item else f"Предмет #{unit.item_id}"
+    # Очищаем реквизиты от технической метки выдачи
+    archive_reqs = str(unit.serial_or_promo).replace("[ВЫДАНО]:", "").strip()
+    
+    created_str = unit.created_at.strftime('%d.%m.%Y %H:%M') if unit.created_at else "Неизвестно"
+    closed_str = unit.updated_at.strftime('%d.%m.%Y %H:%M') if unit.updated_at else "Неизвестно"
+    
+    text = (
+        f"📋 **Архивная карточка выдачи #{unit.id}**\n\n"
+        f"🎒 **Выданный предмет:** {item_name}\n"
+        f"👤 **ID получателя:** <code>{unit.owner_id}</code>\n"
+        f"🔍 **Источник получения:** {unit.purchase_source or 'Магазин/Сундук'}\n\n"
+        f"📅 **Дата оформления:** {created_str}\n"
+        f"✅ **Дата закрытия:** {closed_str}\n\n"
+        f"📍 **Реквизиты, по которым была выдача:**\n<code>{archive_reqs}</code>"
+    )
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [
+            InlineKeyboardButton(text="↩️ Назад к архиву", callback_data=f"mg_orders_archive:{page}")
+        ]
+    ])
+    
+    try:
+        await callback.message.edit_text(text=text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        await callback.message.answer(text=text, reply_markup=kb, parse_mode="HTML")
+        try: await callback.message.delete()
+        except Exception: pass
+        
+    await callback.answer()
+
 
