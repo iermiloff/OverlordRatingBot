@@ -144,7 +144,7 @@ async def process_user_inventory_view_click(
     elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
         reqs = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
         serial_text = f"⏳ **Статус:** Ожидает отправки администрацией\n📋 **Ваши реквизиты:** `{reqs}`"
-    elif unit.serial_or_promo.startswith("[ВЫДАНО]:"):
+    elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ВЫДАНО]:"):
         reqs = unit.serial_or_promo.replace("[ВЫДАНО]:", "").strip()
         serial_text = f"✅ **Статус:** Выдано / Отправлено!\n📋 **Данные:** `{reqs}`"
     else:
