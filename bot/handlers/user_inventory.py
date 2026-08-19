@@ -68,7 +68,7 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
         nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"u_inv_page:{page-1}"))
     if page * limit < total:
         nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"u_inv_page:{page+1}"))
-    
+  
     if nav_row:
         buttons.append(nav_row)
         
@@ -78,16 +78,30 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
     
     reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     
-    try:
-        await callback.message.edit_text(
+    has_media = bool(callback.message.photo or callback.message.animation or callback.message.document)
+    
+    if has_media:
+        # Если откатываемся с картинки — удаляем её и шлём список чистым текстом
+        try: await callback.message.delete()
+        except Exception: pass
+        
+        await callback.message.answer(
             text=text,
             reply_markup=reply_markup,
             parse_mode="Markdown"
         )
-    except Exception:
-        pass
+    else:
+        # Если переключаем обычные текстовые страницы — плавно редактируем на месте
+        try:
+            await callback.message.edit_text(
+                text=text,
+                reply_markup=reply_markup,
+                parse_mode="Markdown"
+            )
+        except Exception: pass
         
     await callback.answer()
+
 
 
 @router.callback_query(F.data.startswith("u_inv_view:"))
