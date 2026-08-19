@@ -117,31 +117,38 @@ async def process_mg_item_card_view(
         and_(StockUnit.item_id == item_id, StockUnit.status == "sold")
     ))).scalar() or 0
 
+    # ... (Выше идет сбор остатков stock_cnt, showcase_cnt со страницы 4 твоего PDF) ...
+    
     p_lbl = "Все" if item.platform_target == "all" else item.platform_target.upper()
+    
+    # ✅ УМНАЯ ПОДСКАЗКА СТАТУСА: Показывает текущую роль товара в ERP
+    ticket_status_lbl = "🎟️ Лотерейный билет" if item.is_ticket else "📦 Обычный товар"
+    
     text = (
-        f"🛍️ **Товар: {item.name}**\n\n"
+        f"📦 **Товар: {item.name}**\n\n"
         f"💰 Цена: **{item.price}** {settings.CURRENCY_NAME}\n"
-        f"🌐 Платформа: `{p_lbl}`\n"
-        f"🎟️ Тип: {'Лотерейный билет' if item.is_ticket else 'Обычный товар'}\n\n"
+        f"📱 Платформа: `{p_lbl}`\n"
+        f"⚙️ Роль в системе: **{ticket_status_lbl}**\n\n" # Изменено тут
         f"📊 **Состояние запасов ERP:**\n"
         f"▪️ В резерве склада: **{stock_cnt}** шт. _(скрыты)_\n"
         f"▪️ На публичной витрине: **{showcase_cnt}** шт. _(в продаже)_\n"
         f"▪️ Всего продано/выдано: **{sold_cnt}** шт.\n\n"
-        f"📜 **Описание карточки:**\n_{item.description or 'Нет описания'}_"
+        f"📋 **Описание карточки:**\n_{item.description or 'Нет описания'}_"
     )
     
+    # ✅ ИСПРАВЛЕНО: Добавлена No-Code кнопка динамического переключения роли товара
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="📥 Загрузить на Склад", 
-                                 callback_data=f"mg_stock_load:{item_id}:{page}"),
-            InlineKeyboardButton(text="🛍️ Выставить на Витрину", 
-                                 callback_data=f"mg_showcase_push:{item_id}:{page}")
+            InlineKeyboardButton(text="📥 Загрузить на Склад", callback_data=f"mg_stock_load:{item_id}:{page}"),
+            InlineKeyboardButton(text="🚀 Выставить на Витрину", callback_data=f"mg_showcase_push:{item_id}:{page}")
         ],
         [
-            InlineKeyboardButton(text="🗑️ Удалить карточку", 
-                                 callback_data=f"mg_item_del:{item_id}:{page}"),
-            InlineKeyboardButton(text="↩️ К списку", 
-                                 callback_data=f"mg_stock_page:{page}")
+            # Кнопка-триггер роли билета
+            InlineKeyboardButton(text="🔄 Сменить роль (Товар 🔄 Билет)", callback_data=f"mg_item_toggle_ticket:{item_id}:{page}")
+        ],
+        [
+            InlineKeyboardButton(text="❌ Удалить карточку", callback_data=f"mg_item_del:{item_id}:{page}"),
+            InlineKeyboardButton(text="↩️ К списку", callback_data=f"mg_stock_page:{page}")
         ]
     ])
     
@@ -149,12 +156,33 @@ async def process_mg_item_card_view(
     except Exception: pass
     
     if item.image_url:
-        await callback.message.answer_photo(
-            item.image_url, caption=text, reply_markup=kb, parse_mode="Markdown"
-        )
+        await callback.message.answer_photo(item.image_url, caption=text, reply_markup=kb, parse_mode="Markdown")
     else:
         await callback.message.answer(text, reply_markup=kb, parse_mode="Markdown")
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("mg_item_toggle_ticket:"))
+async def process_mg_item_toggle_ticket(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    """Атомарно инвертирует флаг лотерейного билета для карточки товара."""
+    if not is_manager: return
+    parts = callback.data.split(":")
+    item_id = int(parts[1])
+    page = int(parts[2])
+    
+    item = await db_session.get(ShopItem, item_id)
+    if item:
+        # Меняем True на False или False на True
+        item.is_ticket = not item.is_ticket
+        await db_session.commit()
+        
+        status_text = "назначен ЛОТЕРЕЙНЫМ БИЛЕТОМ" if item.is_ticket else "переведен в разряд ОБЫЧНЫХ ТОВАРОВ"
+        await callback.answer(f"✅ Успешно! Товар '{item.name}' {status_text}.", show_alert=True)
+        
+    # Мгновенно обновляем карточку товара на экране менеджера
+    callback.data = f"mg_item_card:{item_id}:{page}"
+    await process_mg_item_card_view(callback, is_manager, db_session)
+
 
 # --- ➕ FSM-КОНСТРУКТОР КАРТОЧКИ ТОВАРА ---
 
