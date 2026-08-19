@@ -359,3 +359,24 @@ async def process_ga_finalize_time(message: Message, state: FSMContext, db_user:
             )
         except Exception: pass
 
+# --- ❌ ХЭНДЛЕР No-Code УДАЛЕНИЯ РОЗЫГРЫША ИЗ СУБД ---
+
+@router.callback_query(F.data.startswith("mg_ga_delete_execute:"))
+async def process_mg_ga_delete_execute(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
+    """Атомарно стирает дефектный или зависший розыгрыш из базы данных."""
+    if not is_manager: return
+    
+    parts = callback.data.split(":")
+    ga_id = int(parts[1])
+    
+    # Ищем лотерею в PostgreSQL
+    ga = await db_session.get(Giveaway, ga_id)
+    if ga:
+        await db_session.delete(ga)
+        await db_session.commit()
+        await callback.answer(f"🗑️ Розыгрыш #{ga_id} полностью стерт из базы данных!", show_alert=True)
+    else:
+        await callback.answer("❌ Розыгрыш не найден или уже удален.", show_alert=True)
+        
+    # Мгновенно обновляем дашборд на экране менеджера, чтобы пульт перерисовался чистым
+    await cmd_manager_giveaways_dashboard(callback, is_manager, db_session)
