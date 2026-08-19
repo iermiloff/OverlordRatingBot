@@ -143,13 +143,11 @@ async def process_ga_winners(message: Message, state: FSMContext):
 
 @router.callback_query(ManagerGiveawaySetup.waiting_for_condition_type, F.data.startswith("mg_ga_cond:"))
 async def process_ga_condition_type(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
-    # Извлекаем чистую строку по индексу 1
-    cond_type = callback.data.split(":")[1]
-    await state.update_data(ga_cond_type=cond_type)
+    cond_type_str = callback.data.split(":")
+    await state.update_data(ga_cond_type=cond_type_str)
     
-    if cond_type == "free":
-        await state.update_data(ga_cond_val="0") # Для бесплатных ID билета равен 0
-        # Сразу переводим на шаг выбора минимального ранга
+    if cond_type_str == "free":
+        await state.update_data(ga_cond_val="0")
         await state.set_state(ManagerGiveawaySetup.waiting_for_title)
         buttons = []
         for t_id, t_info in settings.parsed_titles.items():
@@ -168,6 +166,7 @@ async def process_ga_condition_type(callback: CallbackQuery, state: FSMContext, 
             buttons.append([InlineKeyboardButton(text=f"🎟️ {t.name}", callback_data=f"mg_ga_ticket:{t.id}")])
         await callback.message.edit_text("🎉 **Шаг 4.1:** Выберите входной билет из ассортимента витрины:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
+
 
 
 @router.callback_query(ManagerGiveawaySetup.waiting_for_ticket, F.data.startswith("mg_ga_ticket:"))
