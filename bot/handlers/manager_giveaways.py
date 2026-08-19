@@ -97,13 +97,18 @@ async def process_ga_type_choice(callback: CallbackQuery, state: FSMContext, db_
 
 @router.callback_query(ManagerGiveawaySetup.waiting_for_value, F.data.startswith("mg_ga_item_set:"))
 async def process_ga_item_choice_save(callback: CallbackQuery, state: FSMContext):
-    """Атомарно сохраняет имя выбранного с инлайн-кнопки товара."""
-    item_name = callback.data.split(":")[1]
-    await state.update_data(ga_val=item_name)
+    """Атомарно сохраняет ЧИСТОЕ имя выбранного с инлайн-кнопки товара."""
+    parts = callback.data.split(":")
+    item_name_str = parts[1]
+    
+    await state.update_data(ga_val=item_name_str)
     
     await state.set_state(ManagerGiveawaySetup.waiting_for_winners)
-    await callback.message.edit_text("👥 **Шаг 3/5:** Введите **количество победителей** (целое число):")
+    try:
+        await callback.message.edit_text("👥 **Шаг 3/5:** Введите **количество победителей** (целое число):")
+    except Exception: pass
     await callback.answer()
+
 
 @router.message(ManagerGiveawaySetup.waiting_for_value)
 async def process_ga_value_input(message: Message, state: FSMContext):
