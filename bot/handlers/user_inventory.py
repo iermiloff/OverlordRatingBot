@@ -104,97 +104,95 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
 
 
 
-@router.callback_query(F.data.startswith("u_inv_view:"))
-async def process_user_inventory_view_click(
-    callback: CallbackQuery, db_session: AsyncSession
-):
-    """Просмотр предмета из инвентаря с жадной загрузкой связей товара."""
-    parts = callback.data.split(":")
-    unit_id = int(parts[1])
-    page = int(parts[2])
-
-    unit_q = select(StockUnit).options(
-        joinedload(StockUnit.item)
-    ).where(StockUnit.id == unit_id)
+@router.callback_query(F.data.startswith("inv_view:"))
+async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
+    """Просмотр конкретного предмета в инвентаре пользователя с учетом медиа (картинок/гифок)."""
+    unit_id = int(callback.data.split(":")[1])
     
+    # Получаем поштучную единицу товара
+    unit_q = select(StockUnit).where(StockUnit.id == unit_id)
     unit = (await db_session.execute(unit_q)).scalar_one_or_none()
     
-    if not unit or unit.status not in ["sold", "won"]:
-        await callback.answer("❌ Предмет не найден!", show_alert=True)
+    if not unit:
+        await callback.answer("❌ Предмет не найден в вашем инвентаре.", show_alert=True)
         return
-        
-    item = unit.item
-    item_name = item.name if item else f"Предмет #{unit.item_id}"
-    
-    buttons = []
-    serial_text = ""
-    
-    if unit.serial_or_promo == "[НЕ ОФОРМЛЕНО]":
-        serial_text = (
-            "⚠️ **Получение товара не оформлено!**\n\n"
-            "Нажмите кнопку ниже, чтобы ввести адрес доставки СДЭК/Почты "
-            "или реквизиты кошелька для выплаты."
+
+    item_q = select(ShopItem).where(ShopItem.id == unit.item_id)
+    shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
+
+    # Базовый текст карточки товара (разметка Markdown)
+    text = (
+        f"📦 **Предмет:** {shop_item.name}\n"
+        f"📝 **Описание:** {shop_item.description or 'Нет описания'}\n"
+        f"🔍 **Источник получения:** {unit.purchase_source or 'Магазин'}\n"
+        f"🆔 **Уникальный ID предмета:** `{unit.id}`\n\n"
+    )
+
+    kb_buttons = []
+
+    # --- ВЕТВЛЕНИЕ ЛОГИКИ В ЗАВИСИМОСТИ ОТ НАЛИЧИЯ И ТЕКСТА РЕКВИЗИТОВ ---
+    if unit.serial_or_promo and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
+        delivery_info = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
+        text += (
+            f"⏳ **Статус:** Ожидает отправки менеджером\n"
+            f"📍 **Ваши реквизиты:**\n_{delivery_info}_"
         )
-        buttons.append([
+
+    elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ВЫДАНО]:"):
+        archive_info = unit.serial_or_promo.replace("[ВЫДАНО]:", "").strip()
+        text += (
+            f"✅ **Статус:** Доставлено / Выдано\n"
+            f"ℹ️ **Информация от админа:**\n_{archive_info}_"
+        )
+
+    elif unit.serial_or_promo:
+        text += (
+            f"🔑 **Ваш промокод / Ключ активации:**\n"
+            f"<code>{unit.serial_or_promo}</code>"
+        )
+
+    else:
+        # Сюда идеально попадает пустой мерч из обычных и кастомных сундуков!
+        text += (
+            f"🛑 **Статус:** Реквизиты доставки не заполнены.\n\n"
+            f"💡 Для получения этого физического мерча, нажмите кнопку ниже и "
+            f"оставьте данные для отправки (ФИО, город, СДЭК/Адрес)."
+        )
+        kb_buttons.append([
             InlineKeyboardButton(
-                text="🚛 Оформить получение", 
-                callback_data=f"u_inv_setup_delivery:{unit_id}:{page}"
+                text="📍 Ввести реквизиты доставки", 
+                callback_data=f"inv_delivery_start:{unit.id}"
             )
         ])
-    elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
-        reqs = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
-        serial_text = f"⏳ **Статус:** Ожидает отправки администрацией\n📋 **Ваши реквизиты:** `{reqs}`"
-    elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ВЫДАНО]:"):
-        reqs = unit.serial_or_promo.replace("[ВЫДАНО]:", "").strip()
-        serial_text = f"✅ **Статус:** Выдано / Отправлено!\n📋 **Данные:** `{reqs}`"
-    else:
-        serial_text = f"🔑 **Лицензионный промокод/ключ:**\n<code>{unit.serial_or_promo}</code>"
 
-    text = (
-        f"🎒 **Карточка предмета из инвентаря**\n\n"
-        f"📦 **Название:** {item_name}\n"
-        f"🆔 **Уникальный ID единицы:** `{unit.id}`\n\n"
-        f"{serial_text}"
-    )
+    # Кнопка возврата в инвентарь
+    kb_buttons.append([
+        InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="user_inventory_main")
+    ])
     
-    buttons.append([InlineKeyboardButton(text="↩️ Назад к инвентарю", callback_data=f"u_inv_page:{page}")])
-    reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
-    
-    # ✅ СТРОГО ИСПРАВЛЕНО: Живой No-Code вывод картинок и гифок товара в инвентаре
-    if item and item.image_url:
-        # Удаляем старое текстовое меню, чтобы красиво перерисовать карточку с медиа
-        try: await callback.message.delete()
-        except Exception: pass
-        
-        # Проверяем расширение файла или маркер анимации для поддержки гифок
-        is_gif = item.image_url.endswith(".gif") or "animation" in item.image_url.lower()
-        
-        if is_gif:
-            await callback.message.answer_animation(
-                animation=item.image_url,
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode="HTML"
-            )
-        else:
-            await callback.message.answer_photo(
-                photo=item.image_url,
-                caption=text,
-                reply_markup=reply_markup,
-                parse_mode="HTML"
-            )
-    else:
-        # Если у товара нет изображения — плавно обновляем обычным текстом
+    current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+
+    # --- УМНОЕ ОБНОВЛЕНИЕ С УЧЕТОМ ТИПА СООБЩЕНИЯ (МЕДИА / ТЕКСТ) ---
+    # Проверяем, содержит ли сообщение картинку или гифку (анимацию)
+    if callback.message.photo or callback.message.animation:
         try:
-            await callback.message.edit_text(
-                text=text, 
-                reply_markup=reply_markup, 
-                parse_mode="HTML"
-            )
-        except Exception: pass
-        
-    await callback.answer()
+            # Если это медиа, то текст — это caption! Редактируем его безопасно.
+            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="Markdown")
+        except Exception:
+            # Бесшовный фолбек из твоего common.py: если Telegram выдает ошибку, переотправляем чистым текстом
+            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
+            try:
+                await callback.message.delete()
+            except Exception:
+                pass
+    else:
+        # Если сообщение было обычным текстовым
+        try:
+            await callback.message.edit_text(text, reply_markup=current_kb, parse_mode="Markdown")
+        except Exception:
+            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
 
+    await callback.answer()
 
 # --- 🚛 FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ ---
 
