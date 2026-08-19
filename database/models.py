@@ -112,7 +112,9 @@ class CustomChest(Base):
     description = Column(Text, nullable=False)
     media_url = Column(String(256), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
-    
+    open_price = Column(Integer, default=0, nullable=True)
+    min_title_id = Column(Integer, default=1, nullable=True)
+    required_item_id = Column(Integer, ForeignKey("shop_items.id"), nullable=True) 
     rewards = relationship("CustomChestReward", back_populates="chest", cascade="all, delete-orphan")
 
 class CustomChestReward(Base):
