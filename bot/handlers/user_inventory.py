@@ -144,10 +144,41 @@ async def process_user_inventory_view_click(
     )
     
     buttons.append([InlineKeyboardButton(text="↩️ Назад к инвентарю", callback_data=f"u_inv_page:{page}")])
+    reply_markup = InlineKeyboardMarkup(inline_keyboard=buttons)
     
-    await callback.message.edit_text(
-        text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="HTML"
-    )
+    # ✅ СТРОГО ИСПРАВЛЕНО: Живой No-Code вывод картинок и гифок товара в инвентаре
+    if item and item.image_url:
+        # Удаляем старое текстовое меню, чтобы красиво перерисовать карточку с медиа
+        try: await callback.message.delete()
+        except Exception: pass
+        
+        # Проверяем расширение файла или маркер анимации для поддержки гифок
+        is_gif = item.image_url.endswith(".gif") or "animation" in item.image_url.lower()
+        
+        if is_gif:
+            await callback.message.answer_animation(
+                animation=item.image_url,
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+        else:
+            await callback.message.answer_photo(
+                photo=item.image_url,
+                caption=text,
+                reply_markup=reply_markup,
+                parse_mode="HTML"
+            )
+    else:
+        # Если у товара нет изображения — плавно обновляем обычным текстом
+        try:
+            await callback.message.edit_text(
+                text=text, 
+                reply_markup=reply_markup, 
+                parse_mode="HTML"
+            )
+        except Exception: pass
+        
     await callback.answer()
 
 
