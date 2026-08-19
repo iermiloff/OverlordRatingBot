@@ -525,20 +525,18 @@ async def process_mg_item_delete(callback: CallbackQuery, is_manager: bool, db_s
     callback.data = f"mg_stock_page:{page}"
     await cmd_manager_shop_stock_main(callback, is_manager, db_session)
 
-# --- 📥 КОНВЕЙЕР ОБРАБОТКИ ВХОДЯЩИХ ЗАЯВОК НА МЕРЧ И ВАУЧЕРЫ ---
-
 @router.callback_query(F.data.startswith("mg_orders_queue:"))
 async def cmd_manager_orders_queue(
     callback: CallbackQuery, is_manager: bool, db_session: AsyncSession
 ):
-    """Вывод реальной очереди необработанных заявок на мерч и крипту."""
+    """Вывод реальной очереди необработанных заявок на мерч и крипту с кнопкой архива."""
     if not is_manager: return
     
     page = int(callback.data.split(":")[1])
     limit = 5
     offset = (page - 1) * limit
     
-    # ИСПРАВЛЕНО: Добавлен joinedload(StockUnit.item) для жадной загрузки связей товара
+    # Добавлен joinedload(StockUnit.item) для жадной загрузки связей товара
     queue_q = select(StockUnit).options(
         joinedload(StockUnit.item)
     ).where(
@@ -584,12 +582,17 @@ async def cmd_manager_orders_queue(
     if nav_row:
         buttons.append(nav_row)
         
+    buttons.append([
+        InlineKeyboardButton(text="📜 Посмотреть архив выдач", callback_data="mg_orders_archive:1")
+    ])
+        
     buttons.append([InlineKeyboardButton(text="↩️ В корень админки", callback_data="main_menu_manager")])
     
     await callback.message.edit_text(
         text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown"
     )
     await callback.answer()
+
 
 @router.callback_query(F.data.startswith("mg_order_manage:"))
 async def process_manager_order_manage_card(
@@ -605,7 +608,7 @@ async def process_manager_order_manage_card(
     unit_q = select(StockUnit).options(joinedload(StockUnit.item)).where(StockUnit.id == unit_id)
     unit = (await db_session.execute(unit_q)).scalar_one_or_none()
     
-    # ИСПРАВЛЕНО: Безопасный редирект в очередь без мутации frozen-объекта callback.data
+    # Исправленный безопасный редирект в очередь без мутации frozen-объекта callback.data
     if not unit or not unit.serial_or_promo or not str(unit.serial_or_promo).startswith("[ЗАЯВКА]:"):
         await callback.answer("❌ Заявка уже обработана или не найдена!", show_alert=True)
         
