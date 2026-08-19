@@ -146,7 +146,7 @@ async def process_cc_ticket_save(callback: CallbackQuery, state: FSMContext):
 async def process_cc_media(
     message: Message, state: FSMContext, db_session: AsyncSession
 ):
-    """Сборщик медиа-файлов и запись кастомного сундука со всеми цензами в базу."""
+    """Сборщик медиа-файлов и прямая запись кастомного сундука со всеми цензами."""
     media_id = None
     if message.photo:
         media_id = message.photo[-1].file_id
@@ -163,22 +163,18 @@ async def process_cc_media(
         
     data = await state.get_data()
     
-    # Создаем объект сундука, фиксируя в базе все настроенные барьеры
+    # Записываем данные напрямую в новые колонки модели
     new_chest = CustomChest(
         name=data.get("cc_name"),
         description=data.get("cc_desc"),
-        media_url=media_id
+        media_url=media_id,
+        open_price=data.get("cc_price", 0),
+        min_title_id=data.get("cc_min_title", 1),
+        required_item_id=data.get("cc_required_item_id")
     )
-    
-    # Если в твоей модели CustomChest есть эти поля, SQLAlchemy запишет их на лету:
-    if hasattr(new_chest, 'open_price'): new_chest.open_price = data.get("cc_price", 0)
-    if hasattr(new_chest, 'min_title_id'): new_chest.min_title_id = data.get("cc_min_title", 1)
-    if hasattr(new_chest, 'required_item_id'): new_chest.required_item_id = data.get("cc_required_item_id")
     
     db_session.add(new_chest)
     await db_session.commit()
-    
-    # Запускаем цикл наполнения призового пула для этого сундука
     await start_reward_setup_loop(message, state, new_chest.id)
 
 @router.callback_query(
@@ -188,23 +184,23 @@ async def process_cc_media(
 async def process_cc_skip_media(
     callback: CallbackQuery, state: FSMContext, db_session: AsyncSession
 ):
-    """Создание чисто текстового шаблона сундука со всеми цензами."""
+    """Создание текстового шаблона сундука с прямой записью цензов."""
     data = await state.get_data()
+    
     new_chest = CustomChest(
         name=data.get("cc_name"),
         description=data.get("cc_desc"),
-        media_url=None
+        media_url=None,
+        open_price=data.get("cc_price", 0),
+        min_title_id=data.get("cc_min_title", 1),
+        required_item_id=data.get("cc_required_item_id")
     )
-    
-    if hasattr(new_chest, 'open_price'): new_chest.open_price = data.get("cc_price", 0)
-    if hasattr(new_chest, 'min_title_id'): new_chest.min_title_id = data.get("cc_min_title", 1)
-    if hasattr(new_chest, 'required_item_id'): new_chest.required_item_id = data.get("cc_required_item_id")
     
     db_session.add(new_chest)
     await db_session.commit()
-    
     await start_reward_setup_loop(callback.message, state, new_chest.id)
     await callback.answer()
+
 
 # --- 🔄 АВТОНОМНЫЙ ЦИКЛ НАГРАД (ЖЕСТКИЙ NO-CODE КОНСТРУКТОР) ---
 async def start_reward_setup_loop(msg: Message, state: FSMContext, chest_id: int):
