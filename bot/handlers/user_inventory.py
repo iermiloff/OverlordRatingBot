@@ -6,6 +6,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
 from sqlalchemy.orm import joinedload
 from database.models import User, ShopItem, StockUnit
+from config import settings
 
 router = Router(name="user_inventory_router")
 logger = logging.getLogger(__name__)
@@ -160,28 +161,19 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-    # ВЫВОД КАРТИНКИ: Проверяем, загружена ли картинка/гифка в ShopItem (поле image или photo)
-    # В зависимости от структуры твоей модели ShopItem, замени shop_item.image на нужное поле
-    item_image = getattr(shop_item, 'image', None) or getattr(shop_item, 'photo', None)
+    item_image = unit.item.image if unit.item else None
 
     if item_image:
-        # Если у товара есть картинка — удаляем текстовое меню списка и шлем красивую медиа-карточку
         try: await callback.message.delete()
         except Exception: pass
         
-        # Проверяем по расширению, картинка это или гифка
         if str(item_image).endswith('.gif'):
             await callback.message.answer_animation(animation=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
         else:
             await callback.message.answer_photo(photo=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
     else:
-        # Если картинки нет, плавно редактируем текст на месте
-        try:
-            await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception:
-            await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="Markdown")
-            
-    await callback.answer()
+        try: await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
+        except Exception: await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="Markdown")
 
 
 @router.callback_query(F.data.startswith("u_inv_claim:"))
