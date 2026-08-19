@@ -236,118 +236,120 @@ async def process_item_desc_input(message: Message, state: FSMContext):
 
 @router.message(ManagerShopItemSetup.waiting_for_price)
 async def process_item_price_input(message: Message, state: FSMContext):
-    """Валидация цены и переход к выбору платформы."""
+    """Валидация цены и переход к первичному разделению типов товара."""
     if not message.text.strip().isdigit():
-        await message.answer("❌ Ошибка! Введите корректное целое число цены:")
+        await message.answer("❌ Введите целое число цены:")
         return
     await state.update_data(item_price=int(message.text.strip()))
     await state.set_state(ManagerShopItemSetup.waiting_for_platform)
  
-    plat_kb = InlineKeyboardMarkup(inline_keyboard=[
+    # Сначала админ выбирает базовый тип товара в ERP
+    type_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🌍 Все платформы", callback_data="mg_plat_set:all"),
-            InlineKeyboardButton(text="📱 Telegram", callback_data="mg_plat_set:tg"),
-            InlineKeyboardButton(text="🎮 Discord", callback_data="mg_plat_set:discord")
-        ]
-    ])
-    await message.answer(
-        "🖥️ **Шаг 4/5:** Выберите **Целевую платформу** для продаж товара:", 
-        reply_markup=plat_kb
-    )
-
-@router.callback_query(
-    ManagerShopItemSetup.waiting_for_platform, 
-    F.data.startswith("mg_plat_set:")
-)
-async def process_item_platform_input(callback: CallbackQuery, state: FSMContext):
-    """Сохранение платформы и запуск развилки типов цифрового контента."""
-    plat_str = callback.data.split(":")[1]
-    await state.update_data(item_plat=plat_str)
-    
-    # Инлайн-развилка для гибкого No-Code управления цифровой экономикой
-    kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🎫 Уникальные промокоды", callback_data="digital_mode:promo"),
-            InlineKeyboardButton(text="🔑 Системный токен / Ключ", callback_data="digital_mode:sys_key")
+            InlineKeyboardButton(text="📦 Обычный / Физический мерч", callback_data="mg_shop_type:physical"),
+            InlineKeyboardButton(text="⚡ Цифровой товар", callback_data="mg_shop_type:digital")
         ],
-        [InlineKeyboardButton(text="❌ Отмена", callback_data="mg_shop_cancel")]
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="mg_shop_back")]
     ])
+    await message.answer("🛠️ **Шаг 4:** Выберите **базовый тип** создаваемого товара:", reply_markup=type_kb)
+
+@router.callback_query(ManagerShopItemSetup.waiting_for_platform, F.data.startswith("mg_shop_type:"))
+async def process_item_type_choice(callback: CallbackQuery, state: FSMContext):
+    """Обработка первичного разделения типов."""
+    chosen_type = callback.data.split(":")[1]
     
-    await callback.message.edit_text(
-        "⚡ **Настройка формата цифрового товара**\n\n"
-        "Выбери режим заправки ключей:\n\n"
-        "• **Уникальные промокоды** — бот попросит загрузить список строк (каждому свой код).\n"
-        "• **Системный токен / Ключ** — промокоды не нужны! Вы просто укажете тираж "
-        "для предметов-пропусков кастомных сундуков активности чата.",
-        reply_markup=kb
-    )
+    if chosen_type == "physical":
+        # Для физического мерча пропускаем все настройки ключей и шлем сразу на фото
+        await state.update_data(item_plat="all", is_system_key=False, is_digital=False)
+        await state.set_state(ManagerShopItemSetup.waiting_for_image)
+        
+        sk_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⏩ Пропустить фото", callback_data="mg_skip_photo")]])
+        await callback.message.edit_text("🖼️ **Шаг 5/5:** Отправьте **Фотографию мерча** для витрины:", reply_markup=sk_kb)
+    else:
+        # Для цифрового товара открываем подвыбор формата ключей
+        await state.update_data(is_digital=True)
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🎫 Уникальные промокоды", callback_data="digital_mode:promo"),
+                InlineKeyboardButton(text="🔑 Системный токен / Ключ", callback_data="digital_mode:sys_key")
+            ]
+        ])
+        await callback.message.edit_text(
+            "⚡ **Настройка цифрового формата**\n\n"
+            "Выбери режим генерации данных:\n\n"
+            "• **Уникальные промокоды** — после загрузки фото бот попросит ввести список строк.\n"
+            "• **Системный токен / Ключ** — коды не нужны! Вы просто укажете тираж предметов-пропусков для кастомных сундуков.",
+            reply_markup=kb
+        )
     await callback.answer()
 
-@router.callback_query(
-    ManagerShopItemSetup.waiting_for_platform, 
-    F.data.startswith("digital_mode:")
-)
+@router.callback_query(ManagerShopItemSetup.waiting_for_platform, F.data.startswith("digital_mode:"))
 async def process_shop_setup_digital_mode_choice(callback: CallbackQuery, state: FSMContext):
-    """Обрабатывает выбор цифрового режима и переводит на шаг загрузки изображения."""
+    """Фиксация режима ключей и переход к фото."""
     mode = callback.data.split(":")[1]
+    is_sys = (mode == "sys_key")
     
-    if mode == "sys_key":
-        await state.update_data(is_system_key=True)
-        prompt_text = (
-            "🔑 **Выбран системный токен-пропуск!**\n\n"
-            "Вводить промокоды вручную списками не потребуется. Бот автоматически пропишет "
-            "маркер `[СИСТЕМНЫЙ КЛЮЧ: СУНДУК]` при заправке склада.\n\n"
-            "🖼️ **Шаг 5/5:** Отправьте **Фотографию товара** для витрины:"
-        )
-    else:
-        await state.update_data(is_system_key=False)
-        prompt_text = (
-            "🎫 **Выбран режим уникальных промокодов.**\n\n"
-            "На следующем этапе (после сохранения карточки) система попросит вас загрузить базу кодов.\n\n"
-            "🖼️ **Шаг 5/5:** Отправьте **Фотографию товара** для витрины:"
-        )
-        
+    await state.update_data(is_system_key=is_sys, item_plat="all")
     await state.set_state(ManagerShopItemSetup.waiting_for_image)
     
-    sk_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="⏩ Пропустить фото", callback_data="mg_skip_photo")]
-    ])
-    await callback.message.edit_text(text=prompt_text, reply_markup=sk_kb)
+    sk_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="⏩ Пропустить фото", callback_data="mg_skip_photo")]])
+    await callback.message.edit_text(
+        "🖼️ **Шаг 5/5:** Отправьте **Фотографию или GIF** для цифровой карточки товара:",
+        reply_markup=sk_kb
+    )
     await callback.answer()
 
-async def save_shop_item_to_db(state: FSMContext, session: AsyncSession, img_id: str = None):
-    """Асинхронная запись сконструированной карточки товара в базу данных."""
+async def save_shop_item_to_db(state: FSMContext, session: AsyncSession, message: Message, img_id: str = None):
+    """Умное сохранение карточки с автоматическим триггером конвейера кодов."""
     data = await state.get_data()
     name = data.get("item_name")
     
-    # Если это системный ключ для кастомных сундуков, принудительно даем ему роль билета/пропуска
     is_sys_key = data.get("is_system_key", False)
+    is_digital = data.get("is_digital", False)
+    
+    # Системные ключи автоматически получают роль билета/пропуска для сундуков
     is_t = "билет" in name.lower() or "лотерея" in name.lower() or is_sys_key
     
     new_item = ShopItem(
         name=name,
         description=data.get("item_desc"),
         price=data.get("item_price"),
-        platform_target=data.get("item_plat"),
+        platform_target=data.get("item_plat", "all"),
         is_ticket=is_t,
         image_url=img_id
     )
     session.add(new_item)
+    await session.flush() # Получаем новый id товара из СУБД до коммита
+    
+    item_id = new_item.id
     await session.commit()
-    await state.clear()
+    
+    # АВТО-ПЕРЕХОД НА ЗАПРОС ПРОМОКОДОВ ДЛЯ ТИПА УНИКАЛЬНЫХ СТРОК
+    if is_digital and not is_sys_key:
+        await state.clear()
+        # Автоматически переключаем стейт на пополнение этой новой позиции
+        await state.update_data(load_item_id=item_id, load_page=1, stock_forced_mode="digital")
+        await state.set_state(ManagerStockLoad.waiting_for_units)
+        
+        await message.answer(
+            f"✅ **Карточка '{name}' создана!**\n\n"
+            f"📥 Так как вы выбрали формат **Уникальных промокодов**, пришлите "
+            f"базу лицензионных ключей (каждый новый код пишите **с новой строки**):"
+        )
+    else:
+        # Для физического мерча или системного токена — просто завершаем
+        await state.clear()
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=" Вернуться на Склад ERP", callback_data="mg_stock_page:1")]])
+        await message.answer(f"✅ Карточка товара **'{name}'** успешно создана! Она добавлена на склад в статусе резерва.", reply_markup=back_kb)
 
 @router.message(ManagerShopItemSetup.waiting_for_image, F.photo)
 async def process_item_image_input(message: Message, state: FSMContext, db_session: AsyncSession):
-    """Обработка загрузки фотографии товара."""
     img_id = message.photo[-1].file_id
-    await save_shop_item_to_db(state, db_session, img_id)
-    await message.answer("✅ Карточка товара успешно создана! Проверьте её в списке склада.")
+    await save_shop_item_to_db(state, db_session, message, img_id)
 
 @router.callback_query(ManagerShopItemSetup.waiting_for_image, F.data == "mg_skip_photo")
 async def process_item_skip_photo(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
-    """Пропуск шага загрузки фотографии."""
-    await save_shop_item_to_db(state, db_session, None)
-    await callback.message.answer("✅ Карточка товара создана (без фото)!")
+    await save_shop_item_to_db(state, db_session, callback.message, None)
     await callback.answer()
 
 # --- 📥 ПОШТУЧНАЯ ЗАПРАВКА СКЛАДА ERP (С ЭМИССИЕЙ СИСТЕМНЫХ ТОКЕНОВ) ---
