@@ -43,8 +43,11 @@ class ManagerGiveawaySetup(StatesGroup):
     waiting_for_type = State()
     waiting_for_value = State()
     waiting_for_winners = State()
-    waiting_for_title = State()
-    waiting_for_duration = State()
+    waiting_for_condition_type = State()  # Развилка: по Билету или по Титулу
+    waiting_for_title = State()           # Выбор квалификационного ранга
+    waiting_for_ticket = State()          # Выбор лотерейного билета из магазина
+    waiting_for_announce_time = State()   # Дата и время публикации анонса
+    waiting_for_finalize_time = State()   # Дата и время подведения итогов
 
 class ManagerSettingsPromo(StatesGroup):
     waiting_for_channel_id = State()
