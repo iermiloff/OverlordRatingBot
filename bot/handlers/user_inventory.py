@@ -141,7 +141,7 @@ async def process_user_inventory_view_click(
                 callback_data=f"u_inv_setup_delivery:{unit_id}:{page}"
             )
         ])
-    elif unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
+    elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
         reqs = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
         serial_text = f"⏳ **Статус:** Ожидает отправки администрацией\n📋 **Ваши реквизиты:** `{reqs}`"
     elif unit.serial_or_promo.startswith("[ВЫДАНО]:"):
