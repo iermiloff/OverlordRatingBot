@@ -117,28 +117,33 @@ async def finalize_active_giveaways(bot: Bot):
         await session.commit()
 
         # --- ФАЗА 2: ПОДВЕДЕНИЕ ИТОГОВ (БИЛЕТЫ + ТИТУЛЫ) ---
-        finalize_q = select(Giveaway).where(and_(Giveaway.finalize_at <= now, Giveaway.status == "active"))
+        finalize_q = select(Giveaway).where(
+            and_(Giveaway.finalize_at <= now, Giveaway.status == "active")
+        )
         gas_to_finalize = (await session.execute(finalize_q)).scalars().all()
         
         for ga in gas_to_finalize:
             unique_uids = []
-            req_title_id = 1
             
-            # Вектор А: Лотерея по билетам из Магазина
+            # 1. Сбор первичного пула участников по финансовому признаку
             if ga.condition_type == "ticket":
                 ticket_id = int(ga.condition_value)
                 units_q = select(StockUnit.owner_id).where(
-                    and_(StockUnit.item_id == ticket_id, StockUnit.status == "sold", StockUnit.owner_id > 0)
+                    and_(
+                        StockUnit.item_id == ticket_id,
+                        StockUnit.status == "sold",
+                        StockUnit.owner_id > 0
+                    )
                 )
                 raw_buyers = (await session.execute(units_q)).scalars().all()
                 unique_uids = list(set(raw_buyers))
-                req_title_id = 1 
-                
-            # Вектор Б: Лотерея свободная по логам активности чата
             else:
-                req_title_id = int(ga.condition_value)
                 logs_q = select(ActivityLog.user_id).where(
-                    and_(ActivityLog.created_at >= ga.announce_at, ActivityLog.created_at <= now, ActivityLog.user_id > 0)
+                    and_(
+                        ActivityLog.created_at >= ga.announce_at,
+                        ActivityLog.created_at <= now,
+                        ActivityLog.user_id > 0
+                    )
                 )
                 raw_chatters = (await session.execute(logs_q)).scalars().all()
                 unique_uids = list(set(raw_chatters))
@@ -148,17 +153,22 @@ async def finalize_active_giveaways(bot: Bot):
                 await session.commit()
                 continue
                 
-            # СКВОЗНОЙ ЦЕНЗ ПО ТИТУЛАМ (РАНГУ ОПЫТА) ДЛЯ ОБОИХ ВЕКТОРОВ
+            # 2. СКВОЗНАЯ ГИБРИДНАЯ ФИЛЬТРАЦИЯ ПО МИНИМАЛЬНОМУ ТИТУЛУ ОПЫТА
             eligible_users = []
+            req_title_id = int(ga.min_title_id) # Твой сквозной ценз ранга
+            
             for uid in unique_uids:
                 u = await session.get(User, uid)
                 if not u or u.is_banned: continue
                 
+                # Вычисляем текущий No-Code левел юзера по его XP
                 u_title_id = 1
                 for t in sorted(settings.parsed_titles.values(), key=lambda x: x.min_rating, reverse=True):
                     if u.lifetime_rating >= t.min_rating:
                         u_title_id = t.id
                         break
+                        
+                # Проверка: юзер должен проходить и по билету, и по уровню ранга чата!
                 if u_title_id >= req_title_id:
                     eligible_users.append(u)
                     
@@ -167,9 +177,11 @@ async def finalize_active_giveaways(bot: Bot):
                 await session.commit()
                 continue
                 
+            # Безопасный рандомный выбор sample против зависания CPU
             actual_winners_count = min(len(eligible_users), ga.winners_count)
             winners = random.sample(eligible_users, k=actual_winners_count)
             
+            # 3. Выдача заслуженных призов победителям конвейера
             for winner in winners:
                 if ga.reward_type == "rating":
                     amount = int(ga.reward_value)
@@ -178,26 +190,33 @@ async def finalize_active_giveaways(bot: Bot):
                     try:
                         await bot.send_message(
                             chat_id=winner.tg_id,
-                            text=f"🎉 **Вы выиграли в лотерее!**\nНаграда: +{amount} {settings.CURRENCY_NAME} зачислена на баланс."
+                            text=f"🎉 **Вы выиграли в лотерее!**\n"
+                                 f"Награда: +{amount} {settings.CURRENCY_NAME} зачислена."
                         )
                     except Exception: pass
                 else:
-                    item_q = select(ShopItem).where(and_(ShopItem.name == ga.reward_value, ShopItem.is_deleted == False)).limit(1)
+                    item_q = select(ShopItem).where(
+                        and_(ShopItem.name == ga.reward_value, ShopItem.is_deleted == False)
+                    ).limit(1)
                     shop_item = (await session.execute(item_q)).scalar_one_or_none()
+                    
                     unit = None
                     if shop_item:
-                        unit_q = select(StockUnit).where(and_(StockUnit.item_id == shop_item.id, StockUnit.status == "stock")).limit(1)
+                        unit_q = select(StockUnit).where(
+                            and_(StockUnit.item_id == shop_item.id, StockUnit.status == "stock")
+                        ).limit(1)
                         unit = (await session.execute(unit_q)).scalar_one_or_none()
                         
                     if unit and shop_item:
                         unit.status = "won"
                         unit.owner_id = winner.tg_id
                         unit.purchase_source = "giveaway"
-                        unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]"
+                        unit.serial_or_promo = "[НЕ ОФОРМЛЕНО]" # Твой фикс анти-скама
                         try:
                             await bot.send_message(
                                 chat_id=winner.tg_id,
-                                text=f"🎉 **Вы выиграли приз: {shop_item.name}!**\nЗайдите в '🎒 Мой Инвентарь' для оформления доставки.",
+                                text=f"🎉 **Вы выиграли главный приз: {shop_item.name}!**\n"
+                                     f"Зайдите в '🎒 Мой Инвентарь' для оформления доставки.",
                                 parse_mode="Markdown"
                             )
                         except Exception: pass
@@ -208,12 +227,12 @@ async def finalize_active_giveaways(bot: Bot):
                         try:
                             await bot.send_message(
                                 chat_id=winner.tg_id,
-                                text=f"🎁 На складе не оказалось приза '{ga.reward_value}'. Начислена компенсация: +{fallback_coins} поинтов!",
+                                text=f"🎁 На складе не оказалось приза '{ga.reward_value}'. "
+                                     f"Вам начислена компенсация: +{fallback_coins} поинтов!",
                                 parse_mode="Markdown"
                             )
                         except Exception: pass
 
-            # 🔥 АТОМАРНОЕ АННУЛИРОВАНИЕ БИЛЕТОВ В ИНВЕНТАРЯХ
             if ga.condition_type == "ticket":
                 burn_stmt = update(StockUnit).where(
                     and_(StockUnit.item_id == int(ga.condition_value), StockUnit.status == "sold")
@@ -226,7 +245,10 @@ async def finalize_active_giveaways(bot: Bot):
                 try:
                     await bot.send_message(
                         chat_id=chat.id,
-                        text=f"🏁 **Лотерея #{ga.id} официально завершена!**\n\n🎁 Приз: *{ga.reward_value}*\n🏆 Победители: {winners_mentions}\n\nБилеты аннулированы, призы выданы!",
+                        text=f"🏁 **Лотерея #{ga.id} официально завершена!**\n\n"
+                             f"🎁 Разыгрывался приз: *{ga.reward_value}*\n"
+                             f"🏆 Победители: {winners_mentions}\n\n"
+                             f"Награды выданы, использованные билеты аннулированы!",
                         parse_mode="Markdown"
                     )
                 except Exception: pass
