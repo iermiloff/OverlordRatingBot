@@ -406,99 +406,80 @@ async def process_mg_stock_load_start(
 
 @router.message(ManagerStockLoad.waiting_for_units)
 async def process_mg_stock_load_save(message: Message, state: FSMContext, db_session: AsyncSession):
-    """Оприходование единиц на склад с автоматическим выпуском системных токенов."""
+    """Оприходование единиц на склад с поддержкой авто-генерации тиражей."""
     data = await state.get_data()
     item_id = data.get("load_item_id")
-    page = data.get("load_page")
+    page = data.get("load_page", 1)
     forced_mode = data.get("stock_forced_mode", "any")
     raw_text = message.text.strip()
  
     item_card = await db_session.get(ShopItem, item_id)
+    # Если это билет или системный ключ — включаем автогенерацию по числу
     is_sys_token_mode = item_card.is_ticket if item_card else False
 
-    # --- СЦЕНАРИЙ А: АВТОМАТИЧЕСКИЙ ВЫПУСК СИСТЕМНЫХ КЛЮЧЕЙ ДЛЯ СУНДУКОВ ---
+    # СЦЕНАРИЙ ДЛЯ ИГРОВЫХ КЛЮЧЕЙ-ТОКЕНОВ (Ввод только числа штук)
     if is_sys_token_mode and raw_text.isdigit() and forced_mode != "physical":
         count = int(raw_text)
         for _ in range(count):
-            unit = StockUnit(
-                item_id=item_id, 
-                status="stock", 
-                serial_or_promo="[СИСТЕМНЫЙ КЛЮЧ: СУНДУК]"
-            )
+            unit = StockUnit(item_id=item_id, status="stock", serial_or_promo="[СИСТЕМНЫЙ КЛЮЧ: СУНДУК]")
             db_session.add(unit)
             
         await db_session.commit()
         await state.clear()
         
-        back_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" Вернуться на Склад", callback_data=f"mg_stock_page:{page}")]
-        ])
-        await message.answer(f"✅ **Эмиссия завершена!** На Склад успешно добавлено: **{count}** шт. системных токенов-пропусков!", reply_markup=back_kb)
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=" Вернуться на Склад", callback_data=f"mg_stock_page:{page}")]])
+        await message.answer(f"✅ **Эмиссия токенов завершена!** На Склад выпущено и заправлено: **{count}** шт. системных пропусков!", reply_markup=back_kb)
         return
 
-    # Валидация профилей для обычных товаров
+    # Стандартная валидация уникальных промокодов построчно
     if forced_mode == "digital" and raw_text.isdigit():
-        await message.answer("❌ **Ошибка профиля!** Этот товар ведётся как цифровой промокод.\nСистема ожидает текст ключа построчно, а не число штук. Пожалуйста, введите промокод(ы):")
+        await message.answer("❌ **Ошибка профиля!** Вы создали карточку уникальных промокодов.\nСистема ожидает текст ключей построчно, а не число штук. Пожалуйста, введите промокоды:")
         return
+        
     if forced_mode == "physical" and not raw_text.isdigit():
-        await message.answer("❌ **Ошибка профиля!** Этот товар ведётся как физический мерч.\nСистема ожидает целое число штук для добавления на склад. Пожалуйста, введите число:")
+        await message.answer("❌ **Ошибка профиля!** Этот товар ведётся как физический мерч.\nСистема ожидает целое число штук. Пожалуйста, введите число:")
         return
  
-    # ВЕТКА 1: Оприходование обычного физического мерча
+    # Оприходование обычного физического мерча (числом)
     if raw_text.isdigit():
         count = int(raw_text)
         for _ in range(count):
             unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=None)
             db_session.add(unit)
- 
         await db_session.commit()
         await state.clear()
  
-        back_kb = InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text=" Вернуться на Склад", callback_data=f"mg_stock_page:{page}")]
-        ])
+        back_kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=" Вернуться на Склад", callback_data=f"mg_stock_page:{page}")]])
         await message.answer(f"✅ Успешно добавлено на Склад: **{count}** шт. мерча!", reply_markup=back_kb)
         return
         
-    # ВЕТКА 2: Оприходование уникальных промокодов построчно с защитой от дубликатов
+    # Оприходование уникальных промокодов построчно (с проверкой дубликатов)
     input_codes = [c.strip() for c in raw_text.split("\n") if c.strip()]
     if not input_codes:
-        await message.answer("❌ Вы прислали пустой текст. Введите промокоды:")
+        await message.answer("❌ Текст пустой! Введите коды:")
         return
  
-    stmt = select(StockUnit.serial_or_promo).where(
-        and_(StockUnit.item_id == item_id, StockUnit.serial_or_promo.in_(input_codes))
-    )
-    existing_res = await db_session.execute(stmt)
-    existing_codes = set(existing_res.scalars().all())
+    stmt = select(StockUnit.serial_or_promo).where(and_(StockUnit.item_id == item_id, StockUnit.serial_or_promo.in_(input_codes)))
+    existing_codes = set((await db_session.execute(stmt)).scalars().all())
  
-    unique_codes = []
-    skipped_codes = []
-    for code in input_codes:
-        if code in existing_codes: skipped_codes.append(code)
-        else: unique_codes.append(code)
+    unique_codes = [c for c in input_codes if c not in existing_codes]
+    skipped_count = len(input_codes) - len(unique_codes)
  
     added_count = 0
     for code in unique_codes:
         unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=code)
         db_session.add(unit)
         added_count += 1
- 
     await db_session.commit()
  
-    report_text = f" 📊 **Партия успешно обработана!**\nДобавлено новых уникальных ключей: **{added_count}** шт.\n"
-    if skipped_codes:
-        preview_skipped = skipped_codes[:5]
-        skipped_list_str = ", ".join([f"`{c}`" for c in preview_skipped])
-        if len(skipped_codes) > 5: skipped_list_str += f" и еще {len(skipped_codes) - 5} шт."
-        report_text += f"\n ⚠️ **Внимание! Отфильтровано дубликатов:** **{len(skipped_codes)}** шт.\nСистема их пропустила:\n{skipped_list_str}\n"
+    report_text = f" 📊 **Партия кодов успешно обработана!**\nДобавлено уникальных лицензий: **{added_count}** шт.\n"
+    if skipped_count > 0:
+        report_text += f"\n⚠️ **Отфильтровано дубликатов:** **{skipped_count}** шт. Система пропустила их для защиты витрины."
  
-    loop_kb = InlineKeyboardMarkup(inline_keyboard=[
-        [
-            InlineKeyboardButton(text="🔄 Добавить ещё коды", callback_data=f"mg_stock_loop_more:{item_id}:{page}"),
-            InlineKeyboardButton(text="🛑 Хватит, закончить", callback_data=f"mg_stock_loop_stop:{page}")
-        ]
-    ])
+    loop_kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="🔄 Добавить ещё коды", callback_data=f"mg_stock_loop_more:{item_id}:{page}"),
+        InlineKeyboardButton(text="🛑 Закончить заправку", callback_data=f"mg_stock_loop_stop:{page}")
+    ]])
     await message.answer(text=report_text, reply_markup=loop_kb, parse_mode="Markdown")
 
 @router.callback_query(F.data.startswith("mg_stock_loop_more:"))
