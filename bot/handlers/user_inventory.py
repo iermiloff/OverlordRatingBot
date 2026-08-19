@@ -106,93 +106,98 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
 
 @router.callback_query(F.data.startswith("inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
-    """Просмотр конкретного предмета в инвентаре пользователя с учетом медиа (картинок/гифок)."""
-    unit_id = int(callback.data.split(":")[1])
-    
-    # Получаем поштучную единицу товара
-    unit_q = select(StockUnit).where(StockUnit.id == unit_id)
-    unit = (await db_session.execute(unit_q)).scalar_one_or_none()
-    
-    if not unit:
-        await callback.answer("❌ Предмет не найден в вашем инвентаре.", show_alert=True)
-        return
+    """Безопасный просмотр карточки предмета инвентаря с гарантированным гашением часиков."""
+    try:
+        unit_id = int(callback.data.split(":")[1])
+        
+        # 1. Получаем единицу товара со Склада
+        unit_q = select(StockUnit).where(StockUnit.id == unit_id)
+        unit = (await db_session.execute(unit_q)).scalar_one_or_none()
+        
+        if not unit:
+            await callback.answer("❌ Предмет не найден в вашем инвентаре.", show_alert=True)
+            return
 
-    item_q = select(ShopItem).where(ShopItem.id == unit.item_id)
-    shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
+        # 2. Получаем карточку самого товара
+        item_q = select(ShopItem).where(ShopItem.id == unit.item_id)
+        shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
 
-    # Базовый текст карточки товара (разметка Markdown)
-    text = (
-        f"📦 **Предмет:** {shop_item.name}\n"
-        f"📝 **Описание:** {shop_item.description or 'Нет описания'}\n"
-        f"🔍 **Источник получения:** {unit.purchase_source or 'Магазин'}\n"
-        f"🆔 **Уникальный ID предмета:** `{unit.id}`\n\n"
-    )
-
-    kb_buttons = []
-
-    # --- ВЕТВЛЕНИЕ ЛОГИКИ В ЗАВИСИМОСТИ ОТ НАЛИЧИЯ И ТЕКСТА РЕКВИЗИТОВ ---
-    if unit.serial_or_promo and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
-        delivery_info = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
-        text += (
-            f"⏳ **Статус:** Ожидает отправки менеджером\n"
-            f"📍 **Ваши реквизиты:**\n_{delivery_info}_"
+        # 3. Собираем чистый текст описания БЕЗ Markdown-форматирования внутри переменных
+        # чтобы Telegram не ругался на спецсимволы в описаниях товаров
+        item_name = shop_item.name
+        item_desc = shop_item.description or "Нет описания"
+        item_source = unit.purchase_source or "Магазин"
+        
+        text = (
+            f"📦 <b>Предмет:</b> {item_name}\n"
+            f"📝 <b>Описание:</b> {item_desc}\n"
+            f"🔍 <b>Источник получения:</b> {item_source}\n"
+            f"🆔 <b>Уникальный ID предмета:</b> <code>{unit.id}</code>\n\n"
         )
 
-    elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ВЫДАНО]:"):
-        archive_info = unit.serial_or_promo.replace("[ВЫДАНО]:", "").strip()
-        text += (
-            f"✅ **Статус:** Доставлено / Выдано\n"
-            f"ℹ️ **Информация от админа:**\n_{archive_info}_"
-        )
+        kb_buttons = []
 
-    elif unit.serial_or_promo:
-        text += (
-            f"🔑 **Ваш промокод / Ключ активации:**\n"
-            f"<code>{unit.serial_or_promo}</code>"
-        )
-
-    else:
-        # Сюда идеально попадает пустой мерч из обычных и кастомных сундуков!
-        text += (
-            f"🛑 **Статус:** Реквизиты доставки не заполнены.\n\n"
-            f"💡 Для получения этого физического мерча, нажмите кнопку ниже и "
-            f"оставьте данные для отправки (ФИО, город, СДЭК/Адрес)."
-        )
-        kb_buttons.append([
-            InlineKeyboardButton(
-                text="📍 Ввести реквизиты доставки", 
-                callback_data=f"inv_delivery_start:{unit.id}"
+        # 4. Проверяем реквизиты (Безопасно к None и строго в HTML под parse_mode)
+        if unit.serial_or_promo and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
+            delivery_info = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
+            text += (
+                f"⏳ <b>Статус:</b> Ожидает отправки менеджером\n"
+                f"📍 <b>Ваши реквизиты:</b>\n<i>{delivery_info}</i>"
             )
+
+        elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ВЫДАНО]:"):
+            archive_info = unit.serial_or_promo.replace("[ВЫДАНО]:", "").strip()
+            text += (
+                f"✅ <b>Статус:</b> Доставлено / Выдано\n"
+                f"ℹ️ <b>Информация от админа:</b>\n<i>{archive_info}</i>"
+            )
+
+        elif unit.serial_or_promo:
+            text += (
+                f"🔑 <b>Ваш промокод / Ключ активации:</b>\n"
+                f"<code>{unit.serial_or_promo}</code>"
+            )
+
+        else:
+            # Сюда залетают все физические выигрыши из сундуков (у которых serial_or_promo == None)
+            text += (
+                f"🛑 <b>Статус:</b> Реквизиты доставки не заполнены.\n\n"
+                f"💡 Для получения этого товара, нажмите кнопку ниже и "
+                f"оставьте данные для отправки (СДЭК, криптокошелёк)."
+            )
+            kb_buttons.append([
+                InlineKeyboardButton(
+                    text="📍 Ввести реквизиты доставки", 
+                    callback_data=f"inv_delivery_start:{unit.id}"
+                )
+            ])
+
+        # Кнопка возврата в общее меню инвентаря
+        kb_buttons.append([
+            InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="user_inventory_main")
         ])
+        
+        current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-    # Кнопка возврата в инвентарь
-    kb_buttons.append([
-        InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="user_inventory_main")
-    ])
+        # 5. ОТПРАВКА КАРТОЧКИ (Метод бесшовного пересоздания сообщения, как на стр 14)
+        # Отправляем новое чистое текстовое сообщение пользователю
+        await callback.message.answer(text, reply_markup=current_kb, parse_mode="HTML")
+        
+        # Удаляем старое сообщение (на котором была картинка/гифка), чтобы чат оставался чистым
+        try:
+            await callback.message.delete()
+        except Exception:
+            pass
+
+    except Exception as e:
+        # Если произошел непредвиденный сбой, пишем его в логи консоли
+        logger.error(f"Ошибка в просмотре инвентаря: {e}", exc_info=True)
+        await callback.answer("⚠️ Произошла ошибка при открытии карточки товара.", show_alert=True)
     
-    current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
+    finally:
+        # ЭТОТ БЛОК ВЫПОЛНИТСЯ ВСЕГДА: часики на кнопке гарантированно погаснут!
+        await callback.answer()
 
-    # --- УМНОЕ ОБНОВЛЕНИЕ С УЧЕТОМ ТИПА СООБЩЕНИЯ (МЕДИА / ТЕКСТ) ---
-    # Проверяем, содержит ли сообщение картинку или гифку (анимацию)
-    if callback.message.photo or callback.message.animation:
-        try:
-            # Если это медиа, то текст — это caption! Редактируем его безопасно.
-            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception:
-            # Бесшовный фолбек из твоего common.py: если Telegram выдает ошибку, переотправляем чистым текстом
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
-            try:
-                await callback.message.delete()
-            except Exception:
-                pass
-    else:
-        # Если сообщение было обычным текстовым
-        try:
-            await callback.message.edit_text(text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
-
-    await callback.answer()
 
 # --- 🚛 FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ ---
 
