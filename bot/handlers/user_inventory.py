@@ -103,7 +103,7 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("inv_view:"))
+@router.callback_query(F.data.startswith("u_inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
     """
     Твой оригинальный рабочий инвентарь.
