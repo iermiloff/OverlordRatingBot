@@ -386,7 +386,10 @@ async def process_mg_stock_loop_more(callback: CallbackQuery, is_manager: bool):
 async def process_mg_stock_loop_stop(callback: CallbackQuery, is_manager: bool, state: FSMContext):
     """Окончательный выход из конвейера заправки ключей с очисткой FSM."""
     if not is_manager: return
-    page = int(callback.data.split(":")[2])
+    
+    # ✅ СТРОГО ИСПРАВЛЕНО: Меняем индекс [2] на, так как в callback_data всего один знак ":"
+    page = int(callback.data.split(":")[1])
+    
     await state.clear() # Жестко чистим память FSM только при выходе
     
     back_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -397,6 +400,7 @@ async def process_mg_stock_loop_stop(callback: CallbackQuery, is_manager: bool, 
         reply_markup=back_kb
     )
     await callback.answer()
+
 
 # --- АТОМАРНЫЙ ПЕРЕНОС ТОВАРОВ НА ВИТРИНУ ПУБЛИЧНЫХ ПРОДАЖ ---
 
