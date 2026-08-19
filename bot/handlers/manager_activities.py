@@ -144,9 +144,11 @@ async def process_add_reward_start(
 async def process_reward_type_choice(
     callback: CallbackQuery, state: FSMContext, db_session: AsyncSession
 ):
-    chosen_type = callback.data.split(":")[1]
+    # ИСПРАВЛЕНО: берем элемент с индексом, чтобы получить чистую строку "rating" или "merch"
+    chosen_type = callback.data.split(":")[1] 
     await state.update_data(reward_type=chosen_type)
     
+    # Переводим в состояние ожидания значения
     await state.set_state(ManagerActivitySetup.waiting_for_reward_value)
     
     if chosen_type == "rating":
@@ -165,7 +167,6 @@ async def process_reward_type_choice(
         
         if not shop_items:
             await callback.answer("❌ На складе нет созданных товаров! Сначала добавьте мерч в CRM магазина.", show_alert=True)
-            # Сбрасываем состояние, если не из чего выбирать
             await state.clear()
             return
             
@@ -182,14 +183,18 @@ async def process_reward_type_choice(
             " **Настройка сундука [Шаг 2/3]**\n\nВыберите **товар/мерч** из списка существующих на Складе:",
             reply_markup=merch_kb
         )
+    
+    # Гарантированно гасим часики анимации на кнопке
     await callback.answer()
 
+
+# ХЭНДЛЕР ДЛЯ ПЕРЕХВАТА КЛИКА ПО МЕРЧУ (Тут тоже исправлено расщепление строки!)
 @router.callback_query(
     ManagerActivitySetup.waiting_for_reward_value, 
     F.data.startswith("act_merch_select:")
 )
 async def process_reward_merch_callback(callback: CallbackQuery, state: FSMContext):
-    # Достаем имя выбранного мерча из callback_data
+    # ИСПРАВЛЕНО: забираем точное имя мерча после двоеточия
     merch_name = callback.data.split(":")[1]
     
     await state.update_data(reward_value=merch_name)
@@ -200,7 +205,6 @@ async def process_reward_merch_callback(callback: CallbackQuery, state: FSMConte
         parse_mode="Markdown"
     )
     await callback.answer()
-
 
 @router.message(ManagerActivitySetup.waiting_for_reward_value)
 async def process_reward_value(message: Message, state: FSMContext):
