@@ -104,7 +104,7 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
 
 
 from aiogram.types import InputMediaPhoto, InputMediaAnimation
-from bot.states import UserInventoryClaimSetup # Гарантируем правильный импорт стейтов
+from bot.states import UserPurchaseSetup 
 
 @router.callback_query(F.data.startswith("u_inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
@@ -184,66 +184,72 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     await callback.answer()
 
 
-# --- FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ (ИСПРАВЛЕНО) ---
 @router.callback_query(F.data.startswith("u_inv_claim:"))
 async def process_user_inventory_claim_start(callback: CallbackQuery, state: FSMContext):
-    """Инициализация FSM-сбора реквизитов получения."""
+    """Инициализация FSM-сбора реквизитов получения приза."""
     parts = callback.data.split(":")
     unit_id = int(parts[1])
+    page = int(parts[2]) if len(parts) > 2 else 1
     
-    # Сохраняем ID предмета в текущий контекст FSM
-    await state.update_data(claim_unit_id=unit_id)
-    await state.set_state(UserInventoryClaimSetup.waiting_for_address)
+    # Сохраняем ID предмета и страницу в текущий контекст FSM (используем понятные ключи)
+    await state.update_data(claim_unit_id=unit_id, claim_page=page)
+    
+    # ИСПРАВЛЕНО: Устанавливаем твой реальный стейт из states.py
+    await state.set_state(UserPurchaseSetup.waiting_for_delivery)
     
     try: await callback.message.delete()
     except Exception: pass
     
     await callback.message.answer(
-        " **Оформление получения награды**\n\n"
-        f"• Если это **вещевой мерч**, введите адрес доставки СДЭК, ФИО и телефон одной строкой.\n"
-        f"• Если это **цифровой ваучер или криптовалюта**, введите адрес вашего кошелька и сеть.\n\n"
-        " Отправьте ваши реквизиты ответным сообщением в чат бота:"
+        "📦 **Оформление получения награды**\n\n"
+        "• Если это **вещевой мерч**, пожалуйста, введите адрес доставки СДЭК, "
+        "ФИО и ваш контактный номер телефона одной строкой.\n"
+        "• Если это **цифровой ваучер или криптовалюта**, введите адрес вашего кошелька и сеть.\n\n"
+        " Отправьте ваши реквизиты обычным текстовым сообщением в чат бота:"
     )
     await callback.answer()
 
 
-# ХЭНДЛЕР ПРИЕМА ТЕКСТА РЕКВИЗИТОВ (ИСПРАВЛЕНО СОСТОЯНИЕ)
-@router.message(UserInventoryClaimSetup.waiting_for_address)
-async def process_u_inv_setup_delivery_save(message: Message, state: FSMContext, db_session: AsyncSession):
+# ХЭНДЛЕР ПРИЕМА ТЕКСТА РЕКВИЗИТОВ
+@router.message(UserPurchaseSetup.waiting_for_delivery)
+async def process_u_inv_setup_delivery_save(
+    message: Message, state: FSMContext, db_session: AsyncSession
+):
     """Сохранение реквизитов и активация заявки в базе данных."""
     delivery_text = message.text.strip()
     data = await state.get_data()
-    unit_id = data.get("claim_unit_id") # Берем правильный ключ из кэша
+    unit_id = data.get("claim_unit_id")
     
+    # Находим поштучную единицу на складе
     unit = await db_session.get(StockUnit, unit_id)
     
-    # Проверяем, что предмет реален и еще не оформлен (поле пустое или None)
+    # Проверяем, что предмет реален и его поле реквизитов еще не заполнено
     if not unit or (unit.serial_or_promo and unit.serial_or_promo != ""):
         await message.answer("❌ Ошибка! Товар уже оформлен или не найден в системе.")
         await state.clear()
         return
         
-    # Переводим предмет в статус активной заявки для CRM менеджеров
+    # Переводим в статус активной заявки для очереди менеджеров
     unit.serial_or_promo = f"[ЗАЯВКА]: {delivery_text}"
     await db_session.commit()
     await state.clear()
     
     await message.answer(
-        " **Реквизиты успешно сохранены!**\n\n"
-        "Заявка передана администрации. Менеджеры проверят реквизиты и отправят ваш приз. "
+        "✅ **Реквизиты успешно сохранены!**\n\n"
+        "Заявка передана администрации и встала в очередь на отправку. "
         "Вы получите уведомление в этот чат, как только статус изменится!"
     )
     
-    # Мгновенное CRM-уведомление администраторам в личку
+    # Мгновенно анонсируем менеджерам о новой заполненной заявке в личку
     for manager_id in settings.managers_list:
         try:
             item_name = unit.item.name if unit.item else "Мерч"
             await message.bot.send_message(
                 chat_id=manager_id,
-                text=f" **Новая заявка на получение приза из Инвентаря!**\n\n"
-                     f"**Пользователь:** {message.from_user.mention_html()}\n"
-                     f" **Товар:** *{item_name}* (ID единицы: {unit.id})\n"
-                     f" **Реквизиты:** `{delivery_text}`",
+                text=f"📦 **Новая заявка на получение приза из Инвентаря!**\n\n"
+                     f"👤 **Пользователь:** {message.from_user.mention_html()}\n"
+                     f"🏷️ **Товар:** *{item_name}* (ID единицы: {unit.id})\n"
+                     f"📍 **Реквизиты:** `{delivery_text}`",
                 parse_mode="HTML"
             )
         except Exception: 
