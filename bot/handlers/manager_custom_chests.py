@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, delete
 
 from config import settings
-from database.models import User, ChatConfig
+from database.models import User, ChatConfig, ShopItem, StockUnit
 from bot.states import (
     ManagerCustomChestSetup, 
     ManagerCustomRewardSetup
