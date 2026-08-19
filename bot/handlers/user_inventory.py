@@ -110,8 +110,8 @@ from bot.states import UserPurchaseSetup
 @router.callback_query(F.data.startswith("u_inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
     """
-    Твой оригинальный рабочий инвентарь.
-    Исправлен только префикс на u_inv_view и добавлена защита от None.
+    Твой оригинальный инвентарь с финальным решением проблемы статусов.
+    Корректно обрабатывает '[НЕ ОФОРМЛЕНО]', пустые поля, заявки и цифровые ключи.
     """
     parts = callback.data.split(":")
     unit_id = int(parts[1])
@@ -136,23 +136,21 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
 
     kb_buttons = []
     
-    # Безопасно извлекаем строку, защищая от None
-    promo_value = getattr(unit, 'serial_or_promo', '') or ''
+    # Безопасно извлекаем строку, убирая лишние пробелы
+    promo_value = str(unit.serial_or_promo).strip() if unit.serial_or_promo else ""
 
-    # --- ТВОЯ ОРИГИНАЛЬНАЯ ЛОГИКА ВЕТВЛЕНИЯ ---
+    # --- 🎯 ЖЕЛЕЗНАЯ СИСТЕМНАЯ ЛОГИКА ВЕТВЛЕНИЯ СТАТУСОВ ---
     if promo_value.startswith("[ЗАЯВКА]:"):
         delivery_info = promo_value.replace("[ЗАЯВКА]:", "").strip()
         text += f"⏳ **Статус:** Ожидает отправки менеджером\n📍 **Ваши реквизиты:**\n_{delivery_info}_"
 
     elif promo_value.startswith("[ВЫДАНО]:"):
         archive_info = promo_value.replace("[ВЫДАНО]:", "").strip()
-        text += f"✅ **Статус:** Доставлено / Выдано\nℹ️ **Информация от админа:**\n_{archive_info}_"
+        text += f"✅ **Статус:** Доставлено / Выдано\nℹ专 **Информация от админа:**\n_{archive_info}_"
 
-    elif promo_value != '':
-        text += f"🔑 **Ваш промокод / Ключ активации:**\n`{unit.serial_or_promo}`"
-
-    else:
-        # Сюда залетает пустой физический мерч из сундуков
+    elif promo_value == "" or promo_value == "[НЕ ОФОРМЛЕНО]":
+        # ИСПРАВЛЕНО: Теперь и пустые поля из сундуков, и системный статус магазина [НЕ ОФОРМЛЕНО]
+        # гарантированно открывают ввод реквизитов для получения мерча/крипты
         text += (
             f"🛑 **Статус:** Реквизиты для получения не заполнены.\n\n"
             f"💡 Для получения этой награды, нажмите кнопку ниже и "
@@ -162,6 +160,10 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
             InlineKeyboardButton(text="📍 Ввести реквизиты для получения", callback_data=f"u_inv_claim:{unit.id}")
         ])
 
+    else:
+        # Если в поле записан реальный цифровой ключ (любой другой текст, не подошедший под фильтры)
+        text += f"🔑 **Ваш промокод / Ключ активации:**\n`{unit.serial_or_promo}`"
+
     # Назад в инвентарь на ту же страницу
     kb_buttons.append([
         InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data=f"u_inv_page:{page}")
@@ -169,24 +171,22 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
+    # Оригинальная работа с медиа (картинки и гифки из image_url)
     item_image = unit.item.image_url if unit.item else None
 
     if item_image:
-        try: 
-            await callback.message.delete()
-        except Exception: 
-            pass
+        try: await callback.message.delete()
+        except Exception: pass
         
         if str(item_image).endswith('.gif'):
             await callback.message.answer_animation(animation=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
         else:
             await callback.message.answer_photo(photo=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
     else:
-        try: 
-            await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception: 
-            await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="Markdown")
+        try: await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
+        except Exception: await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="Markdown")
 
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("u_inv_claim:"))
