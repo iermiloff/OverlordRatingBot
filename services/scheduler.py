@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from aiogram import Bot
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from sqlalchemy import select, and_, func
+from sqlalchemy import select, and_, func, update
 
 from config import settings
 from database.connection import AsyncSessionLocal
