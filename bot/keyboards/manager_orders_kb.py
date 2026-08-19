@@ -22,6 +22,11 @@ def get_admin_order_keyboard(order_id: int, page: int, has_next: bool) -> Inline
     if nav_row:
         buttons.append(nav_row)
         
+    if page == 1:
+        buttons.append([
+            InlineKeyboardButton(text="📜 Посмотреть архив выдач", callback_data="mg_orders_archive:1")
+        ])
+        
     # Кнопка спасения меню от пропадания
     buttons.append([
         InlineKeyboardButton(text="↩️ Главное меню админки", callback_data="main_menu_manager")
