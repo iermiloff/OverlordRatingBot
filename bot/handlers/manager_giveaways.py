@@ -126,34 +126,46 @@ async def process_ga_value_input(message: Message, state: FSMContext):
     await message.answer("👥 **Шаг 3/5:** Введите **количество победителей** (целое число):")
 
 
-@router.callback_query(ManagerGiveawaySetup.waiting_for_winners)
+# Обнови/проверь стейты в bot/states.py:
+# class ManagerGiveawaySetup(StatesGroup):
+#     ...
+#     waiting_for_condition_type = State() # Выбор: бесплатно или билет
+#     waiting_for_ticket = State()         # Выбор конкретного билета
+#     waiting_for_title = State()          # ОБЯЗАТЕЛЬНЫЙ выбор титула-ценза
+#     waiting_for_announce_time = State()
+#     waiting_for_finalize_time = State()
+
 @router.message(ManagerGiveawaySetup.waiting_for_winners)
 async def process_ga_winners(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
-        await message.answer("❌ Введите целое число победителей:")
+        await message.answer("❌ Введите целое число победителеи:")
         return
     await state.update_data(ga_winners=int(message.text.strip()))
     
     await state.set_state(ManagerGiveawaySetup.waiting_for_condition_type)
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="🎖️ Свободный (по Титулу)", callback_data="mg_ga_cond:title"),
-            InlineKeyboardButton(text="🎟️ Платный (по Билету)", callback_data="mg_ga_cond:ticket")
+            InlineKeyboardButton(text="🆓 Бесплатный вход (из чата)", callback_data="mg_ga_cond:free"),
+            InlineKeyboardButton(text="🎟️ Вход по Билету магазина", callback_data="mg_ga_cond:ticket")
         ]
     ])
-    await message.answer("🎉 **Шаг 4:** Выберите формат участия в лотерее:", reply_markup=kb)
+    await message.answer("🎉 **Шаг 4:** Выберите финансовое условие лотереи:", reply_markup=kb)
+
 
 @router.callback_query(ManagerGiveawaySetup.waiting_for_condition_type, F.data.startswith("mg_ga_cond:"))
 async def process_ga_condition_type(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
+    # Извлекаем чистую строку по индексу 1
     cond_type = callback.data.split(":")[1]
     await state.update_data(ga_cond_type=cond_type)
     
-    if cond_type == "title":
+    if cond_type == "free":
+        await state.update_data(ga_cond_val="0") # Для бесплатных ID билета равен 0
+        # Сразу переводим на шаг выбора минимального ранга
         await state.set_state(ManagerGiveawaySetup.waiting_for_title)
         buttons = []
         for t_id, t_info in settings.parsed_titles.items():
             buttons.append([InlineKeyboardButton(text=f"🎖️ {t_info.name}", callback_data=f"mg_ga_title:{t_id}")])
-        await callback.message.edit_text("🎉 **Шаг 4.1:** Минимальный титул для участия:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+        await callback.message.edit_text("🎉 **Шаг 5:** Укажите минимальный ТИТУЛ опыта для допуска участников:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     else:
         await state.set_state(ManagerGiveawaySetup.waiting_for_ticket)
         t_q = select(ShopItem).where(and_(ShopItem.is_ticket == True, ShopItem.is_deleted == False))
@@ -162,26 +174,35 @@ async def process_ga_condition_type(callback: CallbackQuery, state: FSMContext, 
         if not tickets:
             await callback.answer("❌ В магазине нет созданных лотерейных билетов!", show_alert=True)
             return
-            
         buttons = []
         for t in tickets:
-            buttons.append([InlineKeyboardButton(text=f"🎟️ {t.name} ({t.price} XP)", callback_data=f"mg_ga_ticket:{t.id}")])
-        await callback.message.edit_text("🎉 **Шаг 4.1:** Выберите билет допуска:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+            buttons.append([InlineKeyboardButton(text=f"🎟️ {t.name}", callback_data=f"mg_ga_ticket:{t.id}")])
+        await callback.message.edit_text("🎉 **Шаг 4.1:** Выберите входной билет из ассортимента витрины:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
     await callback.answer()
 
-@router.callback_query(ManagerGiveawaySetup.waiting_for_title, F.data.startswith("mg_ga_title:"))
-async def process_ga_title_choice(callback: CallbackQuery, state: FSMContext):
-    t_id = int(callback.data.split(":")[1])
-    await state.update_data(ga_cond_val=t_id)
-    await state.set_state(ManagerGiveawaySetup.waiting_for_announce_time)
-    await callback.message.edit_text("📅 **Шаг 5:** Время **АНОНСА** в группы\nФормат строго: `ДД.ММ.ГГГГ ЧХ:ММ` (напр. `19.08.2026 18:00`):")
 
 @router.callback_query(ManagerGiveawaySetup.waiting_for_ticket, F.data.startswith("mg_ga_ticket:"))
 async def process_ga_ticket_choice(callback: CallbackQuery, state: FSMContext):
     ticket_item_id = int(callback.data.split(":")[1])
     await state.update_data(ga_cond_val=ticket_item_id)
+    
+    # После выбора билета ТОЖЕ требуем указать минимальный титул!
+    await state.set_state(ManagerGiveawaySetup.waiting_for_title)
+    buttons = []
+    for t_id, t_info in settings.parsed_titles.items():
+        buttons.append([InlineKeyboardButton(text=f"🎖️ {t_info.name}", callback_data=f"mg_ga_title:{t_id}")])
+    await callback.message.edit_text("🎉 **Шаг 5:** Укажите минимальный ТИТУЛ опыта, необходимый помимо билета:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+    await callback.answer()
+
+
+@router.callback_query(ManagerGiveawaySetup.waiting_for_title, F.data.startswith("mg_ga_title:"))
+async def process_ga_title_choice(callback: CallbackQuery, state: FSMContext):
+    t_id = int(callback.data.split(":")[1])
+    await state.update_data(ga_min_title=t_id)
+    
     await state.set_state(ManagerGiveawaySetup.waiting_for_announce_time)
-    await callback.message.edit_text("📅 **Шаг 5:** Время **АНОНСА** в группы\nФормат строго: `ДД.ММ.ГГГГ ЧХ:ММ` (напр. `19.08.2026 18:00`):")
+    await callback.message.edit_text("📅 **Шаг 5.1:** Время **АНОНСА** розыгрыша\nФормат строго: `ДД.ММ.ГГГГ ЧХ:ММ` (напр. `19.08.2026 18:00`):")
+    await callback.answer()
 
 @router.message(ManagerGiveawaySetup.waiting_for_announce_time)
 async def process_ga_announce_time(message: Message, state: FSMContext, db_user: User):
