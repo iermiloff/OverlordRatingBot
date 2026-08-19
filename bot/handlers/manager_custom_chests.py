@@ -84,19 +84,19 @@ async def process_cc_name(message: Message, state: FSMContext):
 @router.message(ManagerCustomChestSetup.waiting_for_description)
 async def process_cc_desc(message: Message, state: FSMContext):
     await state.update_data(cc_desc=message.text.strip())
-    # ИСПРАВЛЕНО: Используем легитимный стейт цены из твоего states.py
-    await state.set_state(ManagerChestSettings.waiting_for_chest_price) 
+    # ИСПРАВЛЕНО: переводим в НАШ СОБСТВЕННЫЙ стейт цены
+    await state.set_state(ManagerCustomChestSetup.waiting_for_custom_price) 
     await message.answer(f"💰 **Шаг 3 [Цена]:** Введите стоимость открытия сундука в {settings.CURRENCY_NAME} (целое число, `0` если бесплатно):")
 
-@router.message(ManagerChestSettings.waiting_for_chest_price)
+@router.message(ManagerCustomChestSetup.waiting_for_custom_price)
 async def process_cc_price_save(message: Message, state: FSMContext):
     if not message.text.strip().isdigit():
         await message.answer("❌ Введите целое число:")
         return
     await state.update_data(cc_price=int(message.text.strip()))
     
-    # ИСПРАВЛЕНО: Используем легитимный стейт титула из твоего states.py
-    await state.set_state(ManagerChestSettings.waiting_for_chest_min_title)
+    # ИСПРАВЛЕНО: переводим в НАШ СОБСТВЕННЫЙ стейт титула
+    await state.set_state(ManagerCustomChestSetup.waiting_for_custom_title)
     
     titles = settings.parsed_titles
     kb_buttons = []
@@ -105,12 +105,11 @@ async def process_cc_price_save(message: Message, state: FSMContext):
         
     await message.answer("🎖️ **Шаг 4 [Титул]:** Выберите минимальный ранг активности для открытия этого сундука:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons))
 
-@router.callback_query(ManagerChestSettings.waiting_for_chest_min_title, F.data.startswith("cc_title_set:"))
+@router.callback_query(ManagerCustomChestSetup.waiting_for_custom_title, F.data.startswith("cc_title_set:"))
 async def process_cc_title_save(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
     title_id = int(callback.data.split(":")[1])
     await state.update_data(cc_min_title=title_id)
     
-    # Шаг выбора обязательного предмета-пропуска (билета) из CRM склада
     items_q = select(ShopItem).where(ShopItem.is_deleted == False)
     shop_items = (await db_session.execute(items_q)).scalars().all()
     
@@ -120,18 +119,19 @@ async def process_cc_title_save(callback: CallbackQuery, state: FSMContext, db_s
     for item in shop_items:
         kb_buttons.append([InlineKeyboardButton(text=f"🔑 {item.name}", callback_data=f"cc_ticket_set:{item.id}")])
         
-    # ИСПРАВЛЕНО: Используем waiting_for_media как легитимный стейт-заглушку перед финальным сбором фото
-    await state.set_state(ManagerCustomChestSetup.waiting_for_media) 
+    # ИСПРАВЛЕНО: переводим в НАШ СОБСТВЕННЫЙ стейт билета
+    await state.set_state(ManagerCustomChestSetup.waiting_for_custom_ticket) 
     await callback.message.edit_text("🔑 **Шаг 5 [Пропуск]:** Выберите предмет на Складе, который спишется как билет-пропуск при открытии сундука:", reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_buttons))
     await callback.answer()
 
-@router.callback_query(ManagerCustomChestSetup.waiting_for_media, F.data.startswith("cc_ticket_set:"))
+@router.callback_query(ManagerCustomChestSetup.waiting_for_custom_ticket, F.data.startswith("cc_ticket_set:"))
 async def process_cc_ticket_save(callback: CallbackQuery, state: FSMContext):
     ticket_val = callback.data.split(":")[1]
     ticket_id = int(ticket_val) if ticket_val != "none" else None
     await state.update_data(cc_required_item_id=ticket_id)
     
-    # Теперь FSM остается в waiting_for_media и готов принять картинку от админа
+    # Теперь переходим к финишной загрузке медиа
+    await state.set_state(ManagerCustomChestSetup.waiting_for_media)
     skip_kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="⏩ Пропустить медиа (только текст)", callback_data="cc_skip_media")]
     ])
