@@ -346,16 +346,56 @@ async def process_mg_stock_load_save(message: Message, state: FSMContext, db_ses
         await message.answer(f"✅ Успешно добавлено на Склад: **{count}** шт. мерча!", reply_markup=back_kb)
         return
 
-    # ВЕТКА 2: Оприходование цифровых промокодов
-    codes = [c.strip() for c in raw_text.split("\n") if c.strip()]
-    for code in codes:
+    input_codes = [c.strip() for c in raw_text.split("\n") if c.strip()]
+    
+    if not input_codes:
+        await message.answer("❌ Вы прислали пустой текст. Введите промокоды:")
+        return
+
+    # 🔍 АТОМАРНАЯ ПРОВЕРКА НА ДУБЛИКАТЫ В БАЗЕ ДАННЫХ
+    # Извлекаем все ключи, которые уже привязаны к этому товару
+    stmt = select(StockUnit.serial_or_promo).where(
+        and_(StockUnit.item_id == item_id, StockUnit.serial_or_promo.in_(input_codes))
+    )
+    existing_res = await db_session.execute(stmt)
+    existing_codes = set(existing_res.scalars().all())
+    
+    # Разделяем коды на уникальные и дубликаты
+    unique_codes = []
+    skipped_codes = []
+    
+    for code in input_codes:
+        if code in existing_codes:
+            skipped_codes.append(code)
+        else:
+            unique_codes.append(code)
+            
+    # Сохраняем строго уникальные новые лицензии
+    added_count = 0
+    for code in unique_codes:
         unit = StockUnit(item_id=item_id, status="stock", serial_or_promo=code)
         db_session.add(unit)
+        added_count += 1
         
     await db_session.commit()
     
-    # 🔄 НАСТОЯЩИЙ ПОШАГОВЫЙ КОНВЕЙЕР "ИДЕМ ДАЛЬШЕ / ХВАТИТ"
-    # Мы НЕ стираем стейт сессии, а выводим пульт управления циклом!
+    # Формируем No-Code отчет для менеджера
+    report_text = f"📥 **Партия успешно обработана!**\n"
+    report_text += f"Добавлено новых уникальных ключей: **{added_count}** шт.\n"
+    
+    if skipped_codes:
+        # Обрезаем список для читаемости на экране смартфона
+        preview_skipped = skipped_codes[:5]
+        skipped_list_str = ", ".join([f"`{c}`" for c in preview_skipped])
+        if len(skipped_codes) > 5:
+            skipped_list_str += f" и еще {len(skipped_codes) - 5} шт."
+            
+        report_text += (
+            f"\n⚠️ **Внимание! Отфильтровано дубликатов:** **{len(skipped_codes)}** шт.\n"
+            f"Эти коды уже использовались или внесены ранее, система их **пропустила**, "
+            f"чтобы защитить витрину от скама:\n{skipped_list_str}\n"
+        )
+        
     loop_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="📥 Добавить ещё коды", callback_data=f"mg_stock_loop_more:{item_id}:{page}"),
@@ -363,12 +403,7 @@ async def process_mg_stock_load_save(message: Message, state: FSMContext, db_ses
         ]
     ])
     
-    await message.answer(
-        f"📥 **Партия успешно обработана!**\n"
-        f"Добавлено лицензионных ключей в этой сессии: **{len(codes)}** шт.\n\n"
-        f"👇 Что делаем дальше?",
-        reply_markup=loop_kb
-    )
+    await message.answer(text=report_text, reply_markup=loop_kb, parse_mode="Markdown")
 
 
 @router.callback_query(F.data.startswith("mg_stock_loop_more:"))
