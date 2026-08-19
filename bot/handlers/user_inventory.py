@@ -110,8 +110,8 @@ from bot.states import UserPurchaseSetup
 @router.callback_query(F.data.startswith("u_inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
     """
-    Твой оригинальный инвентарь с финальным решением проблемы статусов.
-    Корректно обрабатывает '[НЕ ОФОРМЛЕНО]', пустые поля, заявки и цифровые ключи.
+    Твой оригинальный инвентарь. 
+    Использует parse_mode="HTML" для 100% защиты от ошибок разметки со скобками и подчеркиваниями.
     """
     parts = callback.data.split(":")
     unit_id = int(parts[1])
@@ -127,32 +127,29 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     item_q = select(ShopItem).where(ShopItem.id == unit.item_id)
     shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
 
+    # Перевели базовый текст на теги HTML (<b>, <i>, <code>)
     text = (
-        f"📦 **Предмет:** {shop_item.name}\n"
-        f"📝 **Описание:** {shop_item.description or 'Нет описания'}\n"
-        f"🔍 **Источник получения:** {unit.purchase_source or 'Магазин'}\n"
-        f"🆔 **Уникальный ID предмета:** `{unit.id}`\n\n"
+        f"📦 <b>Предмет:</b> {shop_item.name}\n"
+        f"📝 <b>Описание:</b> {shop_item.description or 'Нет описания'}\n"
+        f"🔍 <b>Источник получения:</b> {unit.purchase_source or 'Магазин'}\n"
+        f"🆔 <b>Уникальный ID предмета:</b> <code>{unit.id}</code>\n\n"
     )
 
     kb_buttons = []
-    
-    # Безопасно извлекаем строку, убирая лишние пробелы
     promo_value = str(unit.serial_or_promo).strip() if unit.serial_or_promo else ""
 
-    # --- 🎯 ЖЕЛЕЗНАЯ СИСТЕМНАЯ ЛОГИКА ВЕТВЛЕНИЯ СТАТУСОВ ---
+    # --- СИСТЕМНАЯ ЛОГИКА ВЕТВЛЕНИЯ СТАТУСОВ (HTML) ---
     if promo_value.startswith("[ЗАЯВКА]:"):
         delivery_info = promo_value.replace("[ЗАЯВКА]:", "").strip()
-        text += f"⏳ **Статус:** Ожидает отправки менеджером\n📍 **Ваши реквизиты:**\n_{delivery_info}_"
+        text += f"⏳ <b>Статус:</b> Ожидает отправки менеджером\n📍 <b>Ваши реквизиты:</b>\n<i>{delivery_info}</i>"
 
     elif promo_value.startswith("[ВЫДАНО]:"):
         archive_info = promo_value.replace("[ВЫДАНО]:", "").strip()
-        text += f"✅ **Статус:** Доставлено / Выдано\nℹ专 **Информация от админа:**\n_{archive_info}_"
+        text += f"✅ <b>Статус:</b> Доставлено / Выдано\nℹ️ <b>Информация от админа:</b>\n<i>{archive_info}</i>"
 
     elif promo_value == "" or promo_value == "[НЕ ОФОРМЛЕНО]":
-        # ИСПРАВЛЕНО: Теперь и пустые поля из сундуков, и системный статус магазина [НЕ ОФОРМЛЕНО]
-        # гарантированно открывают ввод реквизитов для получения мерча/крипты
         text += (
-            f"🛑 **Статус:** Реквизиты для получения не заполнены.\n\n"
+            f"🛑 <b>Статус:</b> Реквизиты для получения не заполнены.\n\n"
             f"💡 Для получения этой награды, нажмите кнопку ниже и "
             f"оставьте данные (ФИО/Адрес для мерча или крипто-кошелек)."
         )
@@ -161,8 +158,8 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
         ])
 
     else:
-        # Если в поле записан реальный цифровой ключ (любой другой текст, не подошедший под фильтры)
-        text += f"🔑 **Ваш промокод / Ключ активации:**\n`{unit.serial_or_promo}`"
+        # Сюда теперь идеально прилетит '[СИСТЕМНЫЙ КЛЮЧ: СУНДУК]' или обычный промокод
+        text += f"🔑 <b>Ваш промокод / Ключ активации:</b>\n<code>{promo_value}</code>"
 
     # Назад в инвентарь на ту же страницу
     kb_buttons.append([
@@ -170,23 +167,27 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
     ])
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
-
-    # Оригинальная работа с медиа (картинки и гифки из image_url)
     item_image = unit.item.image_url if unit.item else None
 
+    # --- СИНХРОНИЗАЦИЯ PARSE_MODE НА HTML ДЛЯ ВСЕХ ФОЛБЕКОВ ---
     if item_image:
-        try: await callback.message.delete()
-        except Exception: pass
+        try: 
+            await callback.message.delete()
+        except Exception: 
+            pass
         
         if str(item_image).endswith('.gif'):
-            await callback.message.answer_animation(animation=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
+            await callback.message.answer_animation(animation=item_image, caption=text, reply_markup=current_kb, parse_mode="HTML")
         else:
-            await callback.message.answer_photo(photo=item_image, caption=text, reply_markup=current_kb, parse_mode="Markdown")
+            await callback.message.answer_photo(photo=item_image, caption=text, reply_markup=current_kb, parse_mode="HTML")
     else:
-        try: await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="Markdown")
-        except Exception: await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="Markdown")
+        try: 
+            await callback.message.edit_text(text=text, reply_markup=current_kb, parse_mode="HTML")
+        except Exception: 
+            await callback.message.answer(text=text, reply_markup=current_kb, parse_mode="HTML")
 
     await callback.answer()
+
 
 
 @router.callback_query(F.data.startswith("u_inv_claim:"))
