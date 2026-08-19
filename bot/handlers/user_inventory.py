@@ -198,26 +198,29 @@ async def process_user_inventory_view_click(
 
 # --- 🚛 FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ ---
 
-@router.callback_query(F.data.startswith("u_inv_setup_delivery:"))
-async def process_u_inv_setup_delivery_start(
-    callback: CallbackQuery, state: FSMContext
-):
+@router.callback_query(F.data.startswith("u_inv_claim:"))
+async def process_user_inventory_claim_start(callback: CallbackQuery, state: FSMContext):
+    """Инициализация FSM-сбора реквизитов доставки для выигранного/купленного мерча."""
     parts = callback.data.split(":")
-    unit_id = int(parts[1])
-    page = int(parts[2])
     
-    await state.update_data(setup_unit_id=unit_id, setup_page=page)
-    # Используем встроенное динамическое состояние
-    from bot.states import UserPurchaseSetup
-    await state.set_state(UserPurchaseSetup.waiting_for_delivery)
+    unit_id = int(parts[1])
+    
+    await state.update_data(claim_unit_id=unit_id)
+    
+    from bot.states import UserInventoryClaimSetup # Проверь имя своего класса стейтов
+    await state.set_state(UserInventoryClaimSetup.waiting_for_address)
+
+    try: await callback.message.delete()
+    except Exception: pass
     
     await callback.message.answer(
-        "📝 **Оформление получения награды**\n\n"
-        "Пожалуйста, введите данные для отправки (ФИО, Город, Адрес СДЭКа/Почты) "
-        "или адрес вашего кошелька TON для выплаты ваучера:"
+        "📦 **Оформление получения награды**\n\n"
+        "• Если это **вещевой мерч**, пожалуйста, введите адрес доставки СДЭК, "
+        "ФИО и ваш контактный номер телефона одной строкой.\n"
+        "• Если это **цифровой ваучер/крипта**, введите адрес вашего кошелька.\n\n"
+        "📝 Отправьте ваши реквизиты сообщением в чат бота:"
     )
     await callback.answer()
-
 
 @router.message(F.state == "UserPurchaseSetup:waiting_for_delivery")
 async def process_u_inv_setup_delivery_save(
