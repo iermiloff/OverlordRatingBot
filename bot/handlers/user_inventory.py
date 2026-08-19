@@ -106,10 +106,9 @@ async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_ses
 
 @router.callback_query(F.data.startswith("inv_view:"))
 async def process_user_inventory_view_click(callback: CallbackQuery, db_session: AsyncSession):
-    """Оригинальный рабочий инвентарь с точечной защитой от None (сохраняет медиа/картинки)."""
+    """Просмотр карточки предмета инвентаря с сохранением оригинального Markdown-режима."""
     unit_id = int(callback.data.split(":")[1])
     
-    # 1. Получаем единицу товара
     unit_q = select(StockUnit).where(StockUnit.id == unit_id)
     unit = (await db_session.execute(unit_q)).scalar_one_or_none()
     
@@ -117,67 +116,65 @@ async def process_user_inventory_view_click(callback: CallbackQuery, db_session:
         await callback.answer("❌ Предмет не найден.", show_alert=True)
         return
 
-    # 2. Получаем саму карточку товара для текста и описания
     item_q = select(ShopItem).where(ShopItem.id == unit.item_id)
     shop_item = (await db_session.execute(item_q)).scalar_one_or_none()
 
-    # Формируем базовое текстовое описание (используем HTML, так как он стабильнее для текстов менеджера)
+    # Возвращаем оригинальную Markdown-структуру твоего проекта
     text = (
-        f"📦 <b>Предмет:</b> {shop_item.name}\n"
-        f"📝 <b>Описание:</b> {shop_item.description or 'Нет описания'}\n"
-        f"🔍 <b>Источник:</b> {unit.purchase_source or 'Магазин'}\n"
-        f"🆔 <b>ID предмета:</b> <code>{unit.id}</code>\n\n"
+        f"📦 **Предмет:** {shop_item.name}\n"
+        f"📝 **Описание:** {shop_item.description or 'Нет описания'}\n"
+        f"🔍 **Источник:** {unit.purchase_source or 'Магазин'}\n"
+        f"🆔 **ID предмета:** `{unit.id}`\n\n"
     )
 
     kb_buttons = []
 
-    # 3. ТОЧЕЧНАЯ ЗАЩИТА ОТ None (Вот тут исходный код падал, теперь он защищен)
-    if unit.serial_or_promo and unit.serial_or_promo.startswith("[ЗАЯВКА]:"):
-        delivery_info = unit.serial_or_promo.replace("[ЗАЯВКА]:", "").strip()
-        text += f"⏳ <b>Статус:</b> Ожидает отправки\n📍 <b>Реквизиты:</b>\n<i>{delivery_info}</i>"
+    # Безопасная проверка на существование строки перед вызовом .startswith()
+    is_delivery_requested = False
+    if unit.serial_or_promo is not None:
+        if str(unit.serial_or_promo).startswith("[ЗАЯВКА]:"):
+            delivery_info = str(unit.serial_or_promo).replace("[ЗАЯВКА]:", "").strip()
+            text += f"⏳ **Статус:** Ожидает отправки\n📍 **Реквизиты:**\n_{delivery_info}_"
+            is_delivery_requested = True
+        elif str(unit.serial_or_promo).startswith("[ВЫДАНО]:"):
+            archive_info = str(unit.serial_or_promo).replace("[ВЫДАНО]:", "").strip()
+            text += f"✅ **Статус:** Выдано\nℹ️ **Инфо:**\n_{archive_info}_"
+            is_delivery_requested = True
+        else:
+            text += f"🔑 **Ваш промокод / Ключ:**\n`{unit.serial_or_promo}`"
+            is_delivery_requested = True
 
-    elif unit.serial_or_promo and unit.serial_or_promo.startswith("[ВЫДАНО]:"):
-        archive_info = unit.serial_or_promo.replace("[ВЫДАНО]:", "").strip()
-        text += f"✅ <b>Статус:</b> Выдано\nℹ️ <b>Инфо:</b>\n<i>{archive_info}</i>"
-
-    elif unit.serial_or_promo:
-        # Если это цифровой ключ/промокод (строка есть, но не начинается с заявки/выдачи)
-        text += f"🔑 <b>Ваш промокод / Ключ:</b>\n<code>{unit.serial_or_promo}</code>"
-
-    else:
-        # ЕСЛИ ПОЛЕ РАВНО None (Наш случай с мерчем из сундука!)
+    # Если в поле None — выводим кнопку реквизитов для мерча из сундука
+    if not is_delivery_requested:
         text += (
-            f"🛑 <b>Статус:</b> Реквизиты доставки не заполнены.\n\n"
-            f" Нажмите кнопку ниже, чтобы оставить данные для отправки."
+            f"🛑 **Статус:** Реквизиты доставки не заполнены.\n\n"
+            f"Нажмите кнопку ниже, чтобы оставить данные для отправки."
         )
         kb_buttons.append([
             InlineKeyboardButton(text="📍 Ввести реквизиты доставки", callback_data=f"inv_delivery_start:{unit.id}")
         ])
 
-    # Кнопка возврата в список инвентаря
     kb_buttons.append([
         InlineKeyboardButton(text="⬅️ Назад в инвентарь", callback_data="user_inventory_main")
     ])
     
     current_kb = InlineKeyboardMarkup(inline_keyboard=kb_buttons)
 
-    # 4. ОРИГИНАЛЬНАЯ ЛОГИКА ОБНОВЛЕНИЯ ЭКРАНА (Редактируем то, что уже на экране)
-    # Если на карточке изначально была картинка/гифка, мы ОБЯЗАНЫ менять edit_caption!
+    # Работа с медиа-сообщениями в оригинальном стиле проекта (как на страницах 14 и 22)
     if callback.message.photo or callback.message.animation:
         try:
-            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="HTML")
+            await callback.message.edit_caption(caption=text, reply_markup=current_kb, parse_mode="Markdown")
         except Exception:
-            # Если Телеграм ругнулся на изменение медиа-подписи, делаем дефолтный пересыл
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="HTML")
+            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
     else:
-        # Если картинки не было и это было обычное текстовое сообщение
         try:
-            await callback.message.edit_text(text, reply_markup=current_kb, parse_mode="HTML")
+            await callback.message.edit_text(text, reply_markup=current_kb, parse_mode="Markdown")
         except Exception:
-            await callback.message.answer(text, reply_markup=current_kb, parse_mode="HTML")
+            await callback.message.answer(text, reply_markup=current_kb, parse_mode="Markdown")
 
-    # Гарантированно тушим часики на кнопке в любом исходе
+    # Этот вызов теперь гарантированно сработает и погасит часики
     await callback.answer()
+
 
 # --- 🚛 FSM-ОФОРМЛЕНИЕ ДОСТАВКИ ИЗ ИНВЕНТАРЯ ---
 
