@@ -232,6 +232,7 @@ async def process_ga_finalize_time(message: Message, state: FSMContext, db_user:
             winners_count=data.get("ga_winners"),
             condition_type=str(data.get("ga_cond_type")[1]), 
             condition_value=str(data.get("ga_cond_val")),
+            min_title_id=int(data.get("ga_min_title")),
             announce_at=data.get("ga_announce_at"),
             finalize_at=utc_finalize,
             status="created"
