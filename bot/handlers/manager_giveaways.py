@@ -140,19 +140,25 @@ async def process_ga_winners(message: Message, state: FSMContext):
     ])
     await message.answer("🎉 **Шаг 4:** Выберите финансовое условие лотереи:", reply_markup=kb)
 
-
 @router.callback_query(ManagerGiveawaySetup.waiting_for_condition_type, F.data.startswith("mg_ga_cond:"))
 async def process_ga_condition_type(callback: CallbackQuery, state: FSMContext, db_session: AsyncSession):
-    cond_type_str = callback.data.split(":")
+    parts = callback.data.split(":")
+    cond_type_str = parts[1] 
+    
     await state.update_data(ga_cond_type=cond_type_str)
     
     if cond_type_str == "free":
-        await state.update_data(ga_cond_val="0")
+        await state.update_data(ga_cond_val="0") # Для бесплатных ID билета равен 0
+        
         await state.set_state(ManagerGiveawaySetup.waiting_for_title)
         buttons = []
         for t_id, t_info in settings.parsed_titles.items():
             buttons.append([InlineKeyboardButton(text=f"🎖️ {t_info.name}", callback_data=f"mg_ga_title:{t_id}")])
-        await callback.message.edit_text("🎉 **Шаг 5:** Укажите минимальный ТИТУЛ опыта для допуска участников:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+            
+        await callback.message.edit_text(
+            "🎉 **Шаг 5:** Укажите минимальный ТИТУЛ опыта для допуска участников:", 
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+        )
     else:
         await state.set_state(ManagerGiveawaySetup.waiting_for_ticket)
         t_q = select(ShopItem).where(and_(ShopItem.is_ticket == True, ShopItem.is_deleted == False))
@@ -161,13 +167,17 @@ async def process_ga_condition_type(callback: CallbackQuery, state: FSMContext, 
         if not tickets:
             await callback.answer("❌ В магазине нет созданных лотерейных билетов!", show_alert=True)
             return
+            
         buttons = []
         for t in tickets:
             buttons.append([InlineKeyboardButton(text=f"🎟️ {t.name}", callback_data=f"mg_ga_ticket:{t.id}")])
-        await callback.message.edit_text("🎉 **Шаг 4.1:** Выберите входной билет из ассортимента витрины:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+            
+        await callback.message.edit_text(
+            "🎉 **Шаг 4.1:** Выберите входной билет из ассортимента витрины:", 
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+        )
+        
     await callback.answer()
-
-
 
 @router.callback_query(ManagerGiveawaySetup.waiting_for_ticket, F.data.startswith("mg_ga_ticket:"))
 async def process_ga_ticket_choice(callback: CallbackQuery, state: FSMContext):
