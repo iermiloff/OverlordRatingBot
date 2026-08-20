@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 # --- 🎒 ГЛАВНЫЙ ИНВЕНТАРЬ ПОЛЬЗОВАТЕЛЯ ---
 
-@router.message(F.text == "🎒 Мой Инвентарь / Награды")
 @router.callback_query(F.data == "user_inventory_main")
 @router.callback_query(F.data.startswith("u_inv_page:"))
 async def cmd_user_inventory_main(callback: CallbackQuery, db_user: User, db_session: AsyncSession):
