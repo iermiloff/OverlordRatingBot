@@ -15,30 +15,28 @@ router = Router(name="common_router")
 stats_cooldowns = {}
 COOLDOWN_SECONDS = 600  # 10 минут кулдауна для игроков
 
-# --- КОМАНДА /start СТРОГО В ЛИЧКЕ БОТА (ЗАЩИТА ЧАТА ОТ КАШИ) ---
-
 @router.message(CommandStart(), F.chat.type == "private")
-async def cmd_start(message: Message, db_user: User):
-    """Приветственный хэндлер при команде /start в личных сообщениях."""
-    text = (
-        f"🤖 **Добро пожаловать в Личный Кабинет {settings.BOT_NAME}!**\n\n"
-        f"Здесь ты можешь отслеживать свою статистику активности в чатах, "
-        f"проверять текущий ранг, выполнять партнерские задания и обменивать "
-        f"накопленный рейтинг на реальный мерч в нашем магазине! 🛍️\n\n"
-        f"Выбери нужный раздел на панели ниже:"
-    )
-        await message.answer(
-        "🧹 Старая клавиатура отключена. Переходим на интерактивное меню!",
-        reply_markup=ReplyKeyboardRemove()
+async def cmd_start(message: Message, db_user: User, state: FSMContext):
+    """Приветственный хэндлер с принудительным удалением репли-клавиатуры."""
+    await state.clear()
     
+    await message.answer(
+        "🧹 Старая текстовая клавиатура отключена. Переходим на интерактивное меню!",
+        reply_markup=ReplyKeyboardRemove()
+    )
+    
+    # Твой оригинальный код вывода инлайн-меню:
     if message.from_user.id in settings.managers_list:
         await message.answer(
-            f"👑 **Вы вошли как менеджер системы!**\n\nВам доступен расширенный пульт CRM управления экономикой чатов:", 
+            " Вы вошли как менеджер системы!", 
             reply_markup=get_manager_inline_menu()
         )
     else:
+        text = (
+            f" **Добро пожаловать в Личный Кабинет {settings.BOT_NAME}!**\n\n"
+            f"Здесь ты можешь отслеживать свою статистику активности в чатах."
+        )
         await message.answer(text, reply_markup=get_user_inline_menu(), parse_mode="Markdown")
-
 
 @router.callback_query(F.data == "main_menu_user")
 async def back_to_user_menu(callback: CallbackQuery):
