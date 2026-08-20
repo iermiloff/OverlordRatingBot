@@ -1,7 +1,7 @@
 import time
 import random  # СЮДА: Подключаем рандом для админской пасхалки
 from aiogram import Router, F
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, ReplyKeyboardRemove
 from aiogram.types import Message, CallbackQuery
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
@@ -27,6 +27,9 @@ async def cmd_start(message: Message, db_user: User):
         f"накопленный рейтинг на реальный мерч в нашем магазине! 🛍️\n\n"
         f"Выбери нужный раздел на панели ниже:"
     )
+        await message.answer(
+        "🧹 Старая клавиатура отключена. Переходим на интерактивное меню!",
+        reply_markup=ReplyKeyboardRemove()
     
     if message.from_user.id in settings.managers_list:
         await message.answer(
