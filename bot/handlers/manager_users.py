@@ -4,6 +4,7 @@ from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKe
 from aiogram.fsm.context import FSMContext
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func, and_
+from sqlalchemy.orm import joinedload
 from config import settings
 from database.models import User, ShopItem, StockUnit
 from bot.states import ManagerUserWalletEdit
@@ -132,9 +133,15 @@ async def process_manager_user_ban_toggle(callback: CallbackQuery, is_manager: b
         
     await process_manager_user_view(callback, is_manager, db_session)
 
+# Убедись, что в самом верху файла manager_users.py импортирован joinedload:
+# from sqlalchemy.orm import joinedload
+
 @router.callback_query(F.data.startswith("mg_u_inv_list:"))
 async def process_manager_user_inventory_list(callback: CallbackQuery, is_manager: bool, db_session: AsyncSession):
-    if not is_manager: return
+    """Вывод инвентаря пользователя для менеджера с жадной загрузкой связей товара."""
+    if not is_manager: 
+        return
+        
     parts = callback.data.split(":")
     user_id = int(parts[1])
     inv_page = int(parts[2])
@@ -149,9 +156,13 @@ async def process_manager_user_inventory_list(callback: CallbackQuery, is_manage
     )
     total = (await db_session.execute(count_q)).scalar() or 0
     
-    units_q = select(StockUnit).where(
+    # ИСПРАВЛЕНО: Добавлен joinedload(StockUnit.item) для предотвращения MissingGreenlet
+    units_q = select(StockUnit).options(
+        joinedload(StockUnit.item)
+    ).where(
         and_(StockUnit.owner_id == user_id, StockUnit.status.in_(["sold", "won"]))
     ).order_by(StockUnit.created_at.desc()).limit(limit).offset(offset)
+    
     units = (await db_session.execute(units_q)).scalars().all()
     
     text = (
@@ -163,14 +174,18 @@ async def process_manager_user_inventory_list(callback: CallbackQuery, is_manage
     
     buttons = []
     for u in units:
+        # Теперь это свойство прочитается из памяти без ошибок асинхронных потоков
         item_name = u.item.name if u.item else f"Предмет #{u.item_id}"
         src = "🛒" if u.purchase_source == "tg" else "🎁"
-        promo_snippet = f" | 🔑 {u.serial_or_promo[:10]}..." if u.serial_or_promo else ""
+        
+        # Безопасно режем строку серийника/промокода, защищаясь от None
+        promo_value = str(u.serial_or_promo).strip() if u.serial_or_promo else ""
+        promo_snippet = f" | 🔑 {promo_value[:10]}..." if promo_value else ""
         
         buttons.append([
             InlineKeyboardButton(
                 text=f"{src} ID: {u.id} | {item_name}{promo_snippet}",
-                callback_data="mg_u_inv_stub" # Заглушка, чисто просмотр строки
+                callback_data="mg_u_inv_stub"  # Заглушка, чисто просмотр строки
             )
         ])
         
@@ -184,10 +199,22 @@ async def process_manager_user_inventory_list(callback: CallbackQuery, is_manage
         
     buttons.append([InlineKeyboardButton(text="↩️ Вернуться к профилю", callback_data=f"mg_u_view:{user_id}:{back_page}")])
     
-    await callback.message.edit_text(
-        text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown"
-    )
+    try:
+        await callback.message.edit_text(
+            text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown"
+        )
+    except Exception:
+        # Фолбек на случай, если Telegram придерется к спецсимволам Markdown в имени/серийнике товара
+        await callback.message.answer(
+            text=text, reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons), parse_mode="Markdown"
+        )
+        try: 
+            await callback.message.delete()
+        except Exception: 
+            pass
+            
     await callback.answer()
+
 
 @router.callback_query(F.data == "mg_u_inv_stub")
 async def process_mg_u_inv_stub(callback: CallbackQuery):
